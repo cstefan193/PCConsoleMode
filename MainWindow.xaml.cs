@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Controls;
+using System.Management;
 using Microsoft.Win32;
 using System.Windows.Threading;
 using System.Reflection;
@@ -38,6 +39,7 @@ namespace PCConsoleMode
 
         private CancellationTokenSource? _cts;
         private bool _lastBtStatus = false;
+        private ManagementEventWatcher? _watcher;
         private readonly string _settingsFile = "settings.json";
         private Settings _settings = new Settings();
 
@@ -164,7 +166,7 @@ namespace PCConsoleMode
             SaveSettings();
             Log("Settings saved");
             StatusText.Text = "Saved";
-            Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _cts != null ? "Running" : "Stopped"));
+            Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
         }
 
         private System.Windows.Forms.NotifyIcon? _notifyIcon;
@@ -187,10 +189,9 @@ namespace PCConsoleMode
 
         private void StartMonitoringIfNeeded()
         {
-            if (_cts == null)
+            if (_watcher is null)
             {
-                _cts = new CancellationTokenSource();
-                Task.Run(() => MonitorLoop(_cts.Token));
+                StartWatcher();
                 Dispatcher.Invoke(() => { StartStopButton.Content = "Stop Monitoring"; StatusText.Text = "Running"; });
                 Log("Monitoring started (background)");
             }
@@ -266,12 +267,11 @@ namespace PCConsoleMode
             });
         }
 
-        private async void StartStopButton_Click(object sender, RoutedEventArgs e)
+        private void StartStopButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_cts != null)
+            if (_watcher != null)
             {
-                _cts.Cancel();
-                _cts = null;
+                StopWatcher();
                 StartStopButton.Content = "Start Monitoring";
                 StatusText.Text = "Stopped";
                 SaveSettings();
@@ -280,46 +280,74 @@ namespace PCConsoleMode
             }
 
             SaveSettings();
-            _cts = new CancellationTokenSource();
+            StartWatcher();
             StartStopButton.Content = "Stop Monitoring";
             StatusText.Text = "Running";
             Log("Monitoring started");
+        }
+
+        // WMI watcher-based approach replaces polling
+        private void StartWatcher()
+        {
             try
             {
-                await Task.Run(() => MonitorLoop(_cts.Token));
+                // set baseline
+                _lastBtStatus = GetBtStatus(_settings.ControllerFriendlyName);
+                var query = new WqlEventQuery("SELECT * FROM Win32_DeviceChangeEvent");
+                _watcher = new ManagementEventWatcher(query);
+                _watcher.EventArrived += (s, e) => {
+                    Log("Device change detected (WMI event)");
+                    try { CheckControllerStatus(); } catch (Exception ex) { Log($"CheckControllerStatus error: {ex.Message}"); }
+                };
+                _watcher.Start();
+                Log("WMI watcher started");
             }
-            catch (OperationCanceledException) { }
-            finally
+            catch (Exception ex)
             {
-                _cts = null;
-                Dispatcher.Invoke(() => { StartStopButton.Content = "Start Monitoring"; StatusText.Text = "Stopped"; });
+                Log($"StartWatcher error: {ex.Message}");
+                _watcher = null;
             }
         }
 
-        private void MonitorLoop(CancellationToken ct)
+        private void StopWatcher()
         {
-            while (!ct.IsCancellationRequested)
+            try
             {
-                bool bt = GetBtStatus(_settings.ControllerFriendlyName);
-                if (bt != _lastBtStatus)
+                if (_watcher != null)
                 {
-                    Log("Detected change in controller presence");
-                    _lastBtStatus = bt;
-                    try { SwitchMode(bt); }
-                    catch (Exception ex) { Log($"SwitchMode error: {ex.Message}"); }
+                    _watcher.Stop();
+                    _watcher.Dispose();
+                    _watcher = null;
                 }
-                else
-                {
-                    Log("No change..");
-                }
-                Thread.Sleep(TimeSpan.FromSeconds(_settings.CheckIntervalSeconds));
+                Log("WMI watcher stopped");
+            }
+            catch (Exception ex) { Log($"StopWatcher error: {ex.Message}"); }
+        }
+
+        private void CheckControllerStatus()
+        {
+            bool bt = GetBtStatus(_settings.ControllerFriendlyName);
+            if (bt != _lastBtStatus)
+            {
+                Log("Detected change in controller presence");
+                _lastBtStatus = bt;
+                try { SwitchMode(bt); }
+                catch (Exception ex) { Log($"SwitchMode error: {ex.Message}"); }
+            }
+            else
+            {
+                Log("No change..");
             }
         }
 
         private bool GetBtStatus(string friendlyName)
         {
-            // Use PowerShell Get-PnpDevice to check
-            var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"try {{ (Get-PnpDevice -Class Bluetooth -FriendlyName '{friendlyName}') -ne $null }} catch {{ $false }}\"")
+            // Use PowerShell similar to original script: read the PnP device property Data
+            if (string.IsNullOrWhiteSpace(friendlyName)) friendlyName = "Xbox Wireless Controller";
+            // escape single quotes
+            var fnEsc = friendlyName.Replace("'", "''");
+            var script = $"-NoProfile -Command \"try {{ (Get-PnpDevice -Class Bluetooth -FriendlyName '{fnEsc}' | Get-PnpDeviceProperty -KeyName '{{83DA6326-97A6-4088-9453-A1923F573B29}} 15' | Select -ExpandProperty Data) }} catch {{ $false }}\"";
+            var psi = new ProcessStartInfo("powershell", script)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -330,9 +358,14 @@ namespace PCConsoleMode
             {
                 using var p = Process.Start(psi);
                 if (p == null) return false;
-                var outt = p.StandardOutput.ReadToEnd();
+                var outt = p.StandardOutput.ReadToEnd().Trim();
                 p.WaitForExit(2000);
-                return outt.Contains("True");
+                if (string.IsNullOrEmpty(outt)) return false;
+                // PowerShell may return True/False or 1/0 or other; try parse
+                if (bool.TryParse(outt, out var b)) return b;
+                if (int.TryParse(outt, out var i)) return i != 0;
+                // fallback: check textual values
+                return outt.Equals("OK", System.StringComparison.OrdinalIgnoreCase) || outt.Equals("True", System.StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception ex)
             {
