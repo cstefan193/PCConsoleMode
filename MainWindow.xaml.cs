@@ -60,6 +60,9 @@ namespace PCConsoleMode
                 if (!string.IsNullOrEmpty(_settings.DesktopAudioDeviceId))
                     DesktopAudioCombo.SelectedValue = _settings.DesktopAudioDeviceId;
                 SteamPathText.Text = _settings.SteamPath;
+                // Program choice
+                ProgramChoice.SelectedIndex = (_settings.LaunchMode ?? "Steam") == "Custom" ? 1 : 0;
+                ProgramArgsText.Text = _settings.ProgramArgs ?? string.Empty;
                 IntervalText.Text = _settings.DebounceSeconds.ToString();
             });
         }
@@ -162,6 +165,22 @@ namespace PCConsoleMode
             }
         }
 
+        private void ProgramChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var choice = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString();
+            if (choice == "Steam")
+            {
+                // default steam path and args
+                if (string.IsNullOrWhiteSpace(SteamPathText.Text)) SteamPathText.Text = "C:\\Program Files (x86)\\Steam\\steam.exe";
+                ProgramArgsText.Text = "steam://open/bigpicture";
+            }
+            else
+            {
+                // custom clears args by default
+                if (ProgramArgsText.Text == "steam://open/bigpicture") ProgramArgsText.Text = string.Empty;
+            }
+        }
+
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
             SaveSettings();
@@ -255,6 +274,8 @@ namespace PCConsoleMode
             _settings.GameAudioDeviceId = (GameAudioCombo.SelectedValue as string) ?? string.Empty;
             _settings.DesktopAudioDeviceId = (DesktopAudioCombo.SelectedValue as string) ?? string.Empty;
             _settings.SteamPath = SteamPathText.Text.Trim();
+            _settings.LaunchMode = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Steam";
+            _settings.ProgramArgs = ProgramArgsText.Text.Trim();
             if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
             var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsFile, json);
@@ -415,7 +436,8 @@ namespace PCConsoleMode
                 SetAudioDeviceById(deviceId);
                 if (!string.IsNullOrWhiteSpace(_settings.SteamPath))
                 {
-                    RunProcessHidden(_settings.SteamPath, "steam://open/bigpicture");
+                    var args = _settings.ProgramArgs ?? "steam://open/bigpicture";
+                    RunProcessHidden(_settings.SteamPath, args);
                 }
             }
             else
@@ -424,7 +446,16 @@ namespace PCConsoleMode
                 var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId) ? _settings.DesktopAudioDeviceId : GetAudioDeviceID("Headphones");
                 if (desktopId != null) SetAudioDeviceById(desktopId);
                 RunProcessHidden("DisplaySwitch.exe", "/internal");
-                StopProcessByName("steam");
+                // stop steam or custom process if configured
+                if (_settings.LaunchMode == "Custom")
+                {
+                    var procName = System.IO.Path.GetFileNameWithoutExtension(_settings.SteamPath ?? string.Empty);
+                    if (!string.IsNullOrEmpty(procName)) StopProcessByName(procName);
+                }
+                else
+                {
+                    StopProcessByName("steam");
+                }
             }
         }
 
@@ -513,6 +544,8 @@ namespace PCConsoleMode
             public string GameAudioDeviceId { get; set; } = string.Empty;
             public string DesktopAudioDeviceId { get; set; } = string.Empty;
             public string SteamPath { get; set; } = "C:\\Program Files (x86)\\Steam\\steam.exe";
+            public string LaunchMode { get; set; } = "Steam"; // or Custom
+            public string? ProgramArgs { get; set; } = "steam://open/bigpicture";
             public int DebounceSeconds { get; set; } = 1;
         }
     }

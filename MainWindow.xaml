@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:PCConsoleMode"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
+        Title="MainWindow" Height="700" Width="1000">
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -21,26 +21,56 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1" Orientation="Vertical" Margin="0,0,0,8">
-            <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Controller:</TextBlock>
-                <ComboBox x:Name="ControllerCombo" Width="300" />
-                <Button x:Name="RefreshBtButton" Width="80" Margin="8,0,0,0" Click="RefreshBtButton_Click">Refresh</Button>
-            </WrapPanel>
-            <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Game Audio Device:</TextBlock>
-                <ComboBox x:Name="GameAudioCombo" Width="400" DisplayMemberPath="Display" SelectedValuePath="Id" />
-                <Button x:Name="RefreshAudioButton" Width="80" Margin="8,0,0,0" Click="RefreshAudioButton_Click">Refresh</Button>
-            </WrapPanel>
-            <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Desktop Audio Device:</TextBlock>
-                <ComboBox x:Name="DesktopAudioCombo" Width="320" DisplayMemberPath="Display" SelectedValuePath="Id" />
-                <Button x:Name="RefreshDesktopButton" Width="80" Margin="8,0,0,0" Click="RefreshDesktopButton_Click">Refresh</Button>
-            </WrapPanel>
-            <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Steam Path / Args:</TextBlock>
-                <TextBox x:Name="SteamPathText" Width="340" />
-                <Button x:Name="BrowseSteamButton" Width="80" Margin="8,0,0,0" Click="BrowseSteamButton_Click">Browse</Button>
-            </WrapPanel>
+            <GroupBox Header="Controller" Margin="0,4">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" Margin="4" Foreground="Gray">
+                        Select the Bluetooth controller to watch for connection state. The watcher will react when this device connects or disconnects. Use Refresh to update the list of paired/recognized controllers.
+                    </TextBlock>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="140" VerticalAlignment="Center">Controller:</TextBlock>
+                        <ComboBox x:Name="ControllerCombo" Width="400" />
+                        <Button x:Name="RefreshBtButton" Width="80" Margin="8,0,0,0" Click="RefreshBtButton_Click">Refresh</Button>
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Audio" Margin="0,4">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" Margin="4" Foreground="Gray">
+                        Configure which audio devices should be selected when switching to game or desktop mode. Refresh to enumerate available output devices. You can pick different devices for game and desktop modes.
+                    </TextBlock>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="140" VerticalAlignment="Center">Game Audio Device:</TextBlock>
+                        <ComboBox x:Name="GameAudioCombo" Width="400" DisplayMemberPath="Display" SelectedValuePath="Id" />
+                        <Button x:Name="RefreshAudioButton" Width="80" Margin="8,0,0,0" Click="RefreshAudioButton_Click">Refresh</Button>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="140" VerticalAlignment="Center">Desktop Audio Device:</TextBlock>
+                        <ComboBox x:Name="DesktopAudioCombo" Width="400" DisplayMemberPath="Display" SelectedValuePath="Id" />
+                        <Button x:Name="RefreshDesktopButton" Width="80" Margin="8,0,0,0" Click="RefreshDesktopButton_Click">Refresh</Button>
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
+            <GroupBox Header="Launch program" Margin="0,4">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" Margin="4" Foreground="Gray">
+                        Configure which program should be launched when the controller connects. By default the app will launch Steam in Big Picture mode. Use "Custom" to point to another executable and provide command-line arguments. The program path and args are saved to your configuration.
+                    </TextBlock>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="140" VerticalAlignment="Center">Program:</TextBlock>
+                        <ComboBox x:Name="ProgramChoice" Width="140" SelectionChanged="ProgramChoice_SelectionChanged">
+                            <ComboBoxItem>Steam</ComboBoxItem>
+                            <ComboBoxItem>Custom</ComboBoxItem>
+                        </ComboBox>
+                        <TextBox x:Name="SteamPathText" Width="240" Margin="8,0,0,0" />
+                        <Button x:Name="BrowseSteamButton" Width="80" Margin="8,0,0,0" Click="BrowseSteamButton_Click">Browse</Button>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="140" VerticalAlignment="Center">Program Args:</TextBlock>
+                        <TextBox x:Name="ProgramArgsText" Width="520" />
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
             <WrapPanel Margin="0,4">
                 <TextBlock Width="140" VerticalAlignment="Center">Debounce Seconds:</TextBlock>
                 <TextBox x:Name="IntervalText" Width="100" />
