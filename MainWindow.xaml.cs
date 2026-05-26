@@ -43,6 +43,7 @@ namespace PCConsoleMode
         private readonly string _settingsFile = "settings.json";
         private Settings _settings = new Settings();
         private DateTime _lockUntil = DateTime.MinValue;
+        private bool _advancedVisible = false;
 
         private void BindSettingsToUi()
         {
@@ -63,7 +64,8 @@ namespace PCConsoleMode
                 // Program choice
                 ProgramChoice.SelectedIndex = (_settings.LaunchMode ?? "Steam") == "Custom" ? 1 : 0;
                 ProgramArgsText.Text = _settings.ProgramArgs ?? string.Empty;
-                IntervalText.Text = _settings.DebounceSeconds.ToString();
+                RetryCountText.Text = _settings.RetryCount.ToString();
+                RetryDelayText.Text = _settings.RetryDelaySeconds.ToString();
             });
         }
 
@@ -189,6 +191,16 @@ namespace PCConsoleMode
             Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
         }
 
+        private void ToggleAdvancedButton_Click(object? sender, RoutedEventArgs e)
+        {
+            _advancedVisible = !_advancedVisible;
+            AdvancedContent.Visibility = _advancedVisible ? Visibility.Visible : Visibility.Collapsed;
+            if (AdvancedToggleIcon != null)
+            {
+                AdvancedToggleIcon.Content = _advancedVisible ? "▼" : "▶";
+            }
+        }
+
         private System.Windows.Forms.NotifyIcon? _notifyIcon;
         private bool _isBackground = false;
 
@@ -277,9 +289,13 @@ namespace PCConsoleMode
             _settings.LaunchMode = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Steam";
             _settings.ProgramArgs = ProgramArgsText.Text.Trim();
             if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
+            if (int.TryParse(RetryCountText.Text.Trim(), out var rc)) _settings.RetryCount = rc;
+            if (int.TryParse(RetryDelayText.Text.Trim(), out var rd)) _settings.RetryDelaySeconds = rd;
             var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsFile, json);
         }
+
+
 
         private void Log(string msg)
         {
@@ -433,7 +449,11 @@ namespace PCConsoleMode
                     }
                 }
                 if (deviceId == null) throw new Exception("No suitable audio device found.");
-                SetAudioDeviceById(deviceId);
+                // attempt to set and verify with retries
+                if (!TrySetAudioDeviceWithRetries(deviceId))
+                {
+                    throw new Exception("Failed to set game audio device after retries.");
+                }
                 if (!string.IsNullOrWhiteSpace(_settings.SteamPath))
                 {
                     var args = _settings.ProgramArgs ?? "steam://open/bigpicture";
@@ -444,7 +464,13 @@ namespace PCConsoleMode
             {
                 Log("Launching desktop mode...");
                 var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId) ? _settings.DesktopAudioDeviceId : GetAudioDeviceID("Headphones");
-                if (desktopId != null) SetAudioDeviceById(desktopId);
+                if (desktopId != null)
+                {
+                    if (!TrySetAudioDeviceWithRetries(desktopId))
+                    {
+                        Log("Warning: failed to set desktop audio device after retries.");
+                    }
+                }
                 RunProcessHidden("DisplaySwitch.exe", "/internal");
                 // stop steam or custom process if configured
                 if (_settings.LaunchMode == "Custom")
@@ -504,6 +530,45 @@ namespace PCConsoleMode
             RunPowershellScript(script, 3000);
         }
 
+        private bool TrySetAudioDeviceWithRetries(string id)
+        {
+            for (int attempt = 1; attempt <= Math.Max(1, _settings.RetryCount); attempt++)
+            {
+                SetAudioDeviceById(id);
+                // small delay to allow OS to apply
+                Thread.Sleep(Math.Max(200, _settings.RetryDelaySeconds * 1000));
+                if (VerifyAudioDeviceIsDefault(id)) return true;
+                Log($"Audio device not yet default, retry {attempt}/{_settings.RetryCount}");
+            }
+            return false;
+        }
+
+        private bool VerifyAudioDeviceIsDefault(string id)
+        {
+            try
+            {
+                var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; (Get-AudioDevice -List | Where-Object { $_.Default -eq $true }) | ForEach-Object { $_.ID }";
+                var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var p = Process.Start(psi);
+                if (p == null) return false;
+                var outt = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(2000);
+                var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries);
+                return lines.Any(l => l.Trim().Equals(id, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                Log($"VerifyAudioDeviceIsDefault error: {ex.Message}");
+                return false;
+            }
+        }
+
         private void StopProcessByName(string name)
         {
             var script = $"Get-Process | Where-Object {{ $_.Name -like '{name}' }} | ForEach-Object {{ Stop-Process -Id $_.Id -Force }}";
@@ -547,6 +612,8 @@ namespace PCConsoleMode
             public string LaunchMode { get; set; } = "Steam"; // or Custom
             public string? ProgramArgs { get; set; } = "steam://open/bigpicture";
             public int DebounceSeconds { get; set; } = 1;
+            public int RetryCount { get; set; } = 5;
+            public int RetryDelaySeconds { get; set; } = 1;
         }
     }
 }

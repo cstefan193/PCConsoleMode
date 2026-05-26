@@ -34,6 +34,8 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- Advanced settings moved to bottom -->
+
             <GroupBox Header="Audio" Margin="0,4">
                 <StackPanel>
                     <TextBlock TextWrapping="Wrap" Margin="4" Foreground="Gray">
@@ -71,10 +73,30 @@
                     </WrapPanel>
                 </StackPanel>
             </GroupBox>
-            <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Debounce Seconds:</TextBlock>
-                <TextBox x:Name="IntervalText" Width="100" />
-            </WrapPanel>
+            <!-- Debounce now shown in Advanced settings -->
+
+            <!-- Advanced settings placed at the end -->
+            <GroupBox Margin="0,8,0,0">
+                <GroupBox.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Advanced settings" FontWeight="Bold" />
+                        <Button x:Name="AdvancedToggleIcon" Width="20" Height="20" Margin="8,0,0,0" Click="ToggleAdvancedButton_Click">▶</Button>
+                    </StackPanel>
+                </GroupBox.Header>
+                <StackPanel x:Name="AdvancedContent" Visibility="Collapsed">
+                    <TextBlock TextWrapping="Wrap" Margin="4" Foreground="Gray">
+                        Retry and debounce tuning. RetryCount controls how many times the app will attempt to set the audio device and verify it became the default. RetryDelaySeconds controls delay between attempts. DebounceSeconds controls how long opposite transitions are ignored after a change.
+                    </TextBlock>
+                    <WrapPanel Margin="0,4">
+                        <TextBlock Width="120" VerticalAlignment="Center">Retry Count:</TextBlock>
+                        <TextBox x:Name="RetryCountText" Width="80" />
+                        <TextBlock Width="160" VerticalAlignment="Center" Margin="12,0,0,0">Retry Delay (secs):</TextBlock>
+                        <TextBox x:Name="RetryDelayText" Width="80" />
+                        <TextBlock Width="160" VerticalAlignment="Center" Margin="12,0,0,0">Debounce Seconds:</TextBlock>
+                        <TextBox x:Name="IntervalText" Width="80" />
+                    </WrapPanel>
+                </StackPanel>
+            </GroupBox>
         </StackPanel>
 
         <TextBox Grid.Row="2" x:Name="LogText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
