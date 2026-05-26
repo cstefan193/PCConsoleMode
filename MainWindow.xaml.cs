@@ -151,7 +151,7 @@ namespace PCConsoleMode
 
         private void BrowseSteamButton_Click(object sender, RoutedEventArgs e)
         {
-            var dlg = new OpenFileDialog();
+            var dlg = new Microsoft.Win32.OpenFileDialog();
             dlg.Filter = "Executables|*.exe|All files|*.*";
             if (dlg.ShowDialog() == true)
             {
