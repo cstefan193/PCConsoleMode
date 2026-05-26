@@ -42,7 +42,7 @@
                 <Button x:Name="BrowseSteamButton" Width="80" Margin="8,0,0,0" Click="BrowseSteamButton_Click">Browse</Button>
             </WrapPanel>
             <WrapPanel Margin="0,4">
-                <TextBlock Width="140" VerticalAlignment="Center">Check Interval (secs):</TextBlock>
+                <TextBlock Width="140" VerticalAlignment="Center">Debounce Seconds:</TextBlock>
                 <TextBox x:Name="IntervalText" Width="100" />
             </WrapPanel>
         </StackPanel>

@@ -42,6 +42,7 @@ namespace PCConsoleMode
         private ManagementEventWatcher? _watcher;
         private readonly string _settingsFile = "settings.json";
         private Settings _settings = new Settings();
+        private DateTime _lockUntil = DateTime.MinValue;
 
         private void BindSettingsToUi()
         {
@@ -59,7 +60,7 @@ namespace PCConsoleMode
                 if (!string.IsNullOrEmpty(_settings.DesktopAudioDeviceId))
                     DesktopAudioCombo.SelectedValue = _settings.DesktopAudioDeviceId;
                 SteamPathText.Text = _settings.SteamPath;
-                IntervalText.Text = _settings.CheckIntervalSeconds.ToString();
+                IntervalText.Text = _settings.DebounceSeconds.ToString();
             });
         }
 
@@ -254,7 +255,7 @@ namespace PCConsoleMode
             _settings.GameAudioDeviceId = (GameAudioCombo.SelectedValue as string) ?? string.Empty;
             _settings.DesktopAudioDeviceId = (DesktopAudioCombo.SelectedValue as string) ?? string.Empty;
             _settings.SteamPath = SteamPathText.Text.Trim();
-            if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.CheckIntervalSeconds = iv;
+            if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
             var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsFile, json);
         }
@@ -327,17 +328,26 @@ namespace PCConsoleMode
         private void CheckControllerStatus()
         {
             bool bt = GetBtStatus(_settings.ControllerFriendlyName);
-            if (bt != _lastBtStatus)
-            {
-                Log("Detected change in controller presence");
-                _lastBtStatus = bt;
-                try { SwitchMode(bt); }
-                catch (Exception ex) { Log($"SwitchMode error: {ex.Message}"); }
-            }
-            else
+            if (bt == _lastBtStatus)
             {
                 Log("No change..");
+                return;
             }
+
+            var now = DateTime.UtcNow;
+            if (now < _lockUntil)
+            {
+                Log($"Change to {(bt ? "connected" : "disconnected")} ignored due to debounce until {_lockUntil:HH:mm:ss}");
+                return;
+            }
+
+            Log("Detected change in controller presence");
+            _lastBtStatus = bt;
+            try { SwitchMode(bt); }
+            catch (Exception ex) { Log($"SwitchMode error: {ex.Message}"); }
+
+            // lock until opposite events are allowed
+            _lockUntil = DateTime.UtcNow.AddSeconds(Math.Max(0, _settings.DebounceSeconds));
         }
 
         private bool GetBtStatus(string friendlyName)
@@ -503,7 +513,7 @@ namespace PCConsoleMode
             public string GameAudioDeviceId { get; set; } = string.Empty;
             public string DesktopAudioDeviceId { get; set; } = string.Empty;
             public string SteamPath { get; set; } = "C:\\Program Files (x86)\\Steam\\steam.exe";
-            public int CheckIntervalSeconds { get; set; } = 5;
+            public int DebounceSeconds { get; set; } = 1;
         }
     }
 }
