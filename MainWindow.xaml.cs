@@ -36,16 +36,21 @@ namespace PCConsoleMode
             PopulateBtDevices();
             BindSettingsToUi();
             // If configured to run at startup, start minimized to tray
-            if (_settings.RunAtStartup)
+            if (_settings.RunAtStartup && _settingsLoaded)
             {
-                StartMonitoringIfNeeded();
+                // start minimized; only start monitoring if it was previously enabled
                 MinimizeToTray();
+                if (_settings.IsMonitoring)
+                {
+                    StartMonitoringIfNeeded();
+                }
             }
 
         }
 
         private void RunAtStartupCheck_Checked(object sender, RoutedEventArgs e)
         {
+            if (_suppressUiEvents) return;
             try
             {
                 EnableStartup();
@@ -53,19 +58,22 @@ namespace PCConsoleMode
                 // when enabling run at startup, start minimized when next run: if already running minimize now
                 if (!_isBackground)
                 {
-                    StartMonitoringIfNeeded();
+                    // just minimize to tray; do not start monitoring automatically
                     MinimizeToTray();
                 }
+                UpdateAutoStartIndicator();
             }
             catch { }
         }
 
         private void RunAtStartupCheck_Unchecked(object sender, RoutedEventArgs e)
         {
+            if (_suppressUiEvents) return;
             try
             {
                 DisableStartup();
                 _settings.RunAtStartup = false;
+                UpdateAutoStartIndicator();
             }
             catch { }
         }
@@ -75,6 +83,8 @@ namespace PCConsoleMode
         private ManagementEventWatcher? _watcher;
         private readonly string _settingsFile = "settings.json";
         private Settings _settings = new Settings();
+        private bool _settingsLoaded = false;
+        private bool _suppressUiEvents = false;
         private DateTime _lockUntil = DateTime.MinValue;
         private bool _advancedVisible = false;
 
@@ -103,14 +113,48 @@ namespace PCConsoleMode
                 // show debounce seconds (interval) in UI; default is 1 in Settings
                 IntervalText.Text = _settings.DebounceSeconds.ToString();
                 // Minimize to tray and run at startup checkboxes
+                _suppressUiEvents = true;
                 MinimizeToTrayCheck.IsChecked = _settings.MinimizeToTray;
-                RunAtStartupCheck.IsChecked = _settings.RunAtStartup;
+                // sync run-at-startup with registry actual value
+                var regHas = RegistryRunKeyExists();
+                RunAtStartupCheck.IsChecked = regHas;
+                _suppressUiEvents = false;
+                UpdateAutoStartIndicator();
+            });
+        }
+
+        private bool RegistryRunKeyExists()
+        {
+            try
+            {
+                var runKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false);
+                if (runKey == null) return false;
+                var val = runKey.GetValue("PCConsoleMode");
+                return val != null;
+            }
+            catch { return false; }
+        }
+
+        private void UpdateAutoStartIndicator()
+        {
+            Dispatcher.Invoke(() => {
+                if (_settings.IsMonitoring && RegistryRunKeyExists())
+                {
+                    AutoStartIndicator.Text = "Monitoring WILL auto-start on next launch";
+                    AutoStartIndicator.Foreground = System.Windows.Media.Brushes.Green;
+                }
+                else
+                {
+                    AutoStartIndicator.Text = "Monitoring will NOT auto-start on next launch";
+                    AutoStartIndicator.Foreground = System.Windows.Media.Brushes.Gray;
+                }
             });
         }
 
         private void LoadSettings()
         {
-            if (File.Exists(_settingsFile))
+            _settingsLoaded = File.Exists(_settingsFile);
+            if (_settingsLoaded)
             {
                 try
                 {
@@ -252,7 +296,7 @@ namespace PCConsoleMode
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
-            SaveSettings();
+            SaveSettings(true);
             Log("Settings saved");
             StatusText.Text = "Saved";
             Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
@@ -271,20 +315,7 @@ namespace PCConsoleMode
         private System.Windows.Forms.NotifyIcon? _notifyIcon;
         private bool _isBackground = false;
 
-        private void BackgroundButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (!_isBackground)
-            {
-                EnableStartup();
-                StartMonitoringIfNeeded();
-                MinimizeToTray();
-            }
-            else
-            {
-                DisableStartup();
-                RestoreFromTray();
-            }
-        }
+        // BackgroundButton removed; use Start Monitoring + close to minimize to tray
 
         private void StartMonitoringIfNeeded()
         {
@@ -332,14 +363,12 @@ namespace PCConsoleMode
             _notifyIcon.ContextMenuStrip = menu;
 
             _isBackground = true;
-            BackgroundButton.Content = "Stop Background";
             this.Hide();
         }
 
         private void RestoreFromTray()
         {
             _isBackground = false;
-            BackgroundButton.Content = "Run in Background";
             this.Show();
             this.WindowState = WindowState.Normal;
             this.Activate();
@@ -375,7 +404,7 @@ namespace PCConsoleMode
                 e.Cancel = true;
                 if (!_isBackground)
                 {
-                    StartMonitoringIfNeeded();
+                    // just minimize to tray; do not start monitoring automatically
                     MinimizeToTray();
                 }
                 return;
@@ -383,7 +412,7 @@ namespace PCConsoleMode
             base.OnClosing(e);
         }
 
-        private void SaveSettings()
+        private void SaveSettings(bool forceCreate = false)
         {
             _settings.ControllerFriendlyName = (ControllerCombo.SelectedItem as string) ?? string.Empty;
             _settings.GameAudioDeviceId = (GameAudioCombo.SelectedValue as string) ?? string.Empty;
@@ -405,8 +434,14 @@ namespace PCConsoleMode
             if (int.TryParse(RetryDelayText.Text.Trim(), out var rd)) _settings.RetryDelaySeconds = rd;
             _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
             _settings.RunAtStartup = RunAtStartupCheck.IsChecked == true;
-            var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_settingsFile, json);
+            // Only create/write settings file if we previously loaded settings or forceCreate is true
+            if (_settingsLoaded || forceCreate)
+            {
+                var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(_settingsFile, json);
+                _settingsLoaded = true;
+            }
+            UpdateAutoStartIndicator();
         }
 
 
@@ -426,12 +461,12 @@ namespace PCConsoleMode
                 StopWatcher();
                 StartStopButton.Content = "Start Monitoring";
                 StatusText.Text = "Stopped";
-                SaveSettings();
+                SaveSettings(true);
                 Log("Monitoring stopped by user");
                 return;
             }
 
-            SaveSettings();
+            SaveSettings(true);
             StartWatcher();
             StartStopButton.Content = "Stop Monitoring";
             StatusText.Text = "Running";
@@ -470,6 +505,8 @@ namespace PCConsoleMode
                     _watcher.Stop();
                     _watcher.Dispose();
                     _watcher = null;
+                    _settings.IsMonitoring = false;
+                    SaveSettings();
                 }
                 Log("WMI watcher stopped");
             }
@@ -727,6 +764,7 @@ namespace PCConsoleMode
             public string LaunchMode { get; set; } = "Steam"; // or Custom
             public bool MinimizeToTray { get; set; } = true;
             public bool RunAtStartup { get; set; } = false;
+            public bool IsMonitoring { get; set; } = false;
             public string? ProgramArgs { get; set; } = "steam://open/bigpicture";
             public int DebounceSeconds { get; set; } = 1;
             public int RetryCount { get; set; } = 5;
