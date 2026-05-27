@@ -35,6 +35,39 @@ namespace PCConsoleMode
             LoadSettings();
             PopulateBtDevices();
             BindSettingsToUi();
+            // If configured to run at startup, start minimized to tray
+            if (_settings.RunAtStartup)
+            {
+                StartMonitoringIfNeeded();
+                MinimizeToTray();
+            }
+
+        }
+
+        private void RunAtStartupCheck_Checked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                EnableStartup();
+                _settings.RunAtStartup = true;
+                // when enabling run at startup, start minimized when next run: if already running minimize now
+                if (!_isBackground)
+                {
+                    StartMonitoringIfNeeded();
+                    MinimizeToTray();
+                }
+            }
+            catch { }
+        }
+
+        private void RunAtStartupCheck_Unchecked(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                DisableStartup();
+                _settings.RunAtStartup = false;
+            }
+            catch { }
         }
 
         private CancellationTokenSource? _cts;
@@ -69,6 +102,9 @@ namespace PCConsoleMode
                 RetryDelayText.Text = _settings.RetryDelaySeconds.ToString();
                 // show debounce seconds (interval) in UI; default is 1 in Settings
                 IntervalText.Text = _settings.DebounceSeconds.ToString();
+                // Minimize to tray and run at startup checkboxes
+                MinimizeToTrayCheck.IsChecked = _settings.MinimizeToTray;
+                RunAtStartupCheck.IsChecked = _settings.RunAtStartup;
             });
         }
 
@@ -331,6 +367,22 @@ namespace PCConsoleMode
             catch (Exception ex) { Log($"DisableStartup error: {ex.Message}"); }
         }
 
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            // if minimize-to-tray is enabled, cancel close and minimize to tray
+            if (MinimizeToTrayCheck.IsChecked == true)
+            {
+                e.Cancel = true;
+                if (!_isBackground)
+                {
+                    StartMonitoringIfNeeded();
+                    MinimizeToTray();
+                }
+                return;
+            }
+            base.OnClosing(e);
+        }
+
         private void SaveSettings()
         {
             _settings.ControllerFriendlyName = (ControllerCombo.SelectedItem as string) ?? string.Empty;
@@ -351,6 +403,8 @@ namespace PCConsoleMode
             if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
             if (int.TryParse(RetryCountText.Text.Trim(), out var rc)) _settings.RetryCount = rc;
             if (int.TryParse(RetryDelayText.Text.Trim(), out var rd)) _settings.RetryDelaySeconds = rd;
+            _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
+            _settings.RunAtStartup = RunAtStartupCheck.IsChecked == true;
             var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsFile, json);
         }
@@ -671,6 +725,8 @@ namespace PCConsoleMode
             public string SteamPath { get; set; } = string.Empty;
             public string CustomPath { get; set; } = string.Empty;
             public string LaunchMode { get; set; } = "Steam"; // or Custom
+            public bool MinimizeToTray { get; set; } = true;
+            public bool RunAtStartup { get; set; } = false;
             public string? ProgramArgs { get; set; } = "steam://open/bigpicture";
             public int DebounceSeconds { get; set; } = 1;
             public int RetryCount { get; set; } = 5;

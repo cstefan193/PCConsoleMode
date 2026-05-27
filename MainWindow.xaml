@@ -18,6 +18,8 @@
             <Button x:Name="StartStopButton" Width="110" Height="30" Click="StartStopButton_Click">Start Monitoring</Button>
             <Button x:Name="SaveButton" Width="80" Height="30" Margin="8,0,0,0" Click="SaveButton_Click">Save</Button>
             <Button x:Name="BackgroundButton" Width="140" Height="30" Margin="8,0,0,0" Click="BackgroundButton_Click">Run in Background</Button>
+            <CheckBox x:Name="MinimizeToTrayCheck" Margin="12,6,0,0" VerticalAlignment="Center" IsChecked="True">Minimize to tray on close</CheckBox>
+            <CheckBox x:Name="RunAtStartupCheck" Margin="8,6,0,0" VerticalAlignment="Center" Checked="RunAtStartupCheck_Checked" Unchecked="RunAtStartupCheck_Unchecked">Run at startup</CheckBox>
             <TextBlock x:Name="StatusText" Margin="12,6,0,0" VerticalAlignment="Center">Stopped</TextBlock>
         </StackPanel>
 
