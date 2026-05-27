@@ -380,8 +380,41 @@ namespace PCConsoleMode
             try
             {
                 var runKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
-                var exePath = Assembly.GetEntryAssembly()?.Location ?? Process.GetCurrentProcess().MainModule?.FileName;
-                if (exePath != null) runKey.SetValue("PCConsoleMode", '"' + exePath + '"');
+                if (runKey == null)
+                {
+                    // try to create the key if it doesn't exist
+                    var baseKey = Registry.CurrentUser.CreateSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run");
+                    runKey = baseKey;
+                }
+                // Determine a command that will actually start the app on login.
+                // Prefer the process executable (Environment.ProcessPath). If the process is the dotnet host
+                // and the entry assembly is a .dll, create a command like: "<dotnet>" "<app.dll>".
+                string? processExe = System.Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+                string? entryAssembly = Assembly.GetEntryAssembly()?.Location;
+                string command;
+                if (!string.IsNullOrEmpty(processExe) && System.IO.Path.GetFileName(processExe).StartsWith("dotnet", System.StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(entryAssembly))
+                {
+                    // framework-dependent: run dotnet with the app dll
+                    command = "\"" + processExe + "\" \"" + entryAssembly + "\"";
+                }
+                else if (!string.IsNullOrEmpty(entryAssembly) && System.IO.Path.GetExtension(entryAssembly).Equals(".exe", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    // standalone exe
+                    command = "\"" + entryAssembly + "\"";
+                }
+                else if (!string.IsNullOrEmpty(processExe))
+                {
+                    // fallback to the process executable
+                    command = "\"" + processExe + "\"";
+                }
+                else
+                {
+                    // last resort: try current process file name
+                    var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                    command = exePath != null ? "\"" + exePath + "\"" : string.Empty;
+                }
+
+                if (!string.IsNullOrEmpty(command)) runKey.SetValue("PCConsoleMode", command);
             }
             catch (Exception ex) { Log($"EnableStartup error: {ex.Message}"); }
         }
@@ -391,7 +424,10 @@ namespace PCConsoleMode
             try
             {
                 var runKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
-                runKey.DeleteValue("PCConsoleMode", false);
+                if (runKey != null)
+                {
+                    runKey.DeleteValue("PCConsoleMode", false);
+                }
             }
             catch (Exception ex) { Log($"DisableStartup error: {ex.Message}"); }
         }
