@@ -66,6 +66,8 @@ namespace PCConsoleMode
                 ProgramArgsText.Text = _settings.ProgramArgs ?? string.Empty;
                 RetryCountText.Text = _settings.RetryCount.ToString();
                 RetryDelayText.Text = _settings.RetryDelaySeconds.ToString();
+                // show debounce seconds (interval) in UI; default is 1 in Settings
+                IntervalText.Text = _settings.DebounceSeconds.ToString();
             });
         }
 
