@@ -60,9 +60,10 @@ namespace PCConsoleMode
                     GameAudioCombo.SelectedValue = _settings.GameAudioDeviceId;
                 if (!string.IsNullOrEmpty(_settings.DesktopAudioDeviceId))
                     DesktopAudioCombo.SelectedValue = _settings.DesktopAudioDeviceId;
-                SteamPathText.Text = _settings.SteamPath;
                 // Program choice
                 ProgramChoice.SelectedIndex = (_settings.LaunchMode ?? "Steam") == "Custom" ? 1 : 0;
+                // Populate program path textbox according to selected mode
+                UpdateProgramPathDisplay();
                 ProgramArgsText.Text = _settings.ProgramArgs ?? string.Empty;
                 RetryCountText.Text = _settings.RetryCount.ToString();
                 RetryDelayText.Text = _settings.RetryDelaySeconds.ToString();
@@ -171,18 +172,46 @@ namespace PCConsoleMode
 
         private void ProgramChoice_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            UpdateProgramPathDisplay();
+        }
+
+        private void UpdateProgramPathDisplay()
+        {
             var choice = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString();
             if (choice == "Steam")
             {
-                // default steam path and args
-                if (string.IsNullOrWhiteSpace(SteamPathText.Text)) SteamPathText.Text = "C:\\Program Files (x86)\\Steam\\steam.exe";
-                ProgramArgsText.Text = "steam://open/bigpicture";
+                // If we don't have a stored Steam path, try to discover a common installation location
+                if (string.IsNullOrWhiteSpace(_settings.SteamPath))
+                {
+                    var found = FindSteamExe();
+                    if (!string.IsNullOrWhiteSpace(found)) _settings.SteamPath = found;
+                }
+                SteamPathText.Text = _settings.SteamPath ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(ProgramArgsText.Text)) ProgramArgsText.Text = "steam://open/bigpicture";
             }
             else
             {
-                // custom clears args by default
+                // Custom program mode: show the custom path (may be blank)
+                SteamPathText.Text = _settings.CustomPath ?? string.Empty;
                 if (ProgramArgsText.Text == "steam://open/bigpicture") ProgramArgsText.Text = string.Empty;
             }
+        }
+
+        private string FindSteamExe()
+        {
+            try
+            {
+                var candidates = new[] {
+                    @"C:\\Program Files (x86)\\Steam\\steam.exe",
+                    @"C:\\Program Files\\Steam\\steam.exe"
+                };
+                foreach (var c in candidates)
+                {
+                    if (File.Exists(c)) return c;
+                }
+            }
+            catch { }
+            return string.Empty;
         }
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -235,7 +264,27 @@ namespace PCConsoleMode
         {
             _notifyIcon ??= new System.Windows.Forms.NotifyIcon();
             _notifyIcon.Text = "PCConsoleMode";
-            _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
+            try
+            {
+                // Load the icon from the application resources (pack URI)
+                var uri = new System.Uri("pack://application:,,,/icons/1-05_icon-icons.com_69204.ico", System.UriKind.Absolute);
+                var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
+                if (stream != null)
+                {
+                    using var ms = new System.IO.MemoryStream();
+                    stream.CopyTo(ms);
+                    ms.Seek(0, System.IO.SeekOrigin.Begin);
+                    _notifyIcon.Icon = new System.Drawing.Icon(ms);
+                }
+                else
+                {
+                    _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
+                }
+            }
+            catch
+            {
+                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
+            }
             _notifyIcon.Visible = true;
             _notifyIcon.DoubleClick += (s, e) => Dispatcher.Invoke(RestoreFromTray);
 
@@ -287,8 +336,17 @@ namespace PCConsoleMode
             _settings.ControllerFriendlyName = (ControllerCombo.SelectedItem as string) ?? string.Empty;
             _settings.GameAudioDeviceId = (GameAudioCombo.SelectedValue as string) ?? string.Empty;
             _settings.DesktopAudioDeviceId = (DesktopAudioCombo.SelectedValue as string) ?? string.Empty;
-            _settings.SteamPath = SteamPathText.Text.Trim();
-            _settings.LaunchMode = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Steam";
+            var programChoice = (ProgramChoice.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Steam";
+            _settings.LaunchMode = programChoice == "Custom" ? "Custom" : "Steam";
+            // Persist path based on selected program choice
+            if (programChoice == "Custom")
+            {
+                _settings.CustomPath = SteamPathText.Text.Trim();
+            }
+            else
+            {
+                _settings.SteamPath = SteamPathText.Text.Trim();
+            }
             _settings.ProgramArgs = ProgramArgsText.Text.Trim();
             if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
             if (int.TryParse(RetryCountText.Text.Trim(), out var rc)) _settings.RetryCount = rc;
@@ -477,7 +535,7 @@ namespace PCConsoleMode
                 // stop steam or custom process if configured
                 if (_settings.LaunchMode == "Custom")
                 {
-                    var procName = System.IO.Path.GetFileNameWithoutExtension(_settings.SteamPath ?? string.Empty);
+                    var procName = System.IO.Path.GetFileNameWithoutExtension(_settings.CustomPath ?? string.Empty);
                     if (!string.IsNullOrEmpty(procName)) StopProcessByName(procName);
                 }
                 else
@@ -610,7 +668,8 @@ namespace PCConsoleMode
             public string ControllerFriendlyName { get; set; } = "Xbox Wireless Controller";
             public string GameAudioDeviceId { get; set; } = string.Empty;
             public string DesktopAudioDeviceId { get; set; } = string.Empty;
-            public string SteamPath { get; set; } = "C:\\Program Files (x86)\\Steam\\steam.exe";
+            public string SteamPath { get; set; } = string.Empty;
+            public string CustomPath { get; set; } = string.Empty;
             public string LaunchMode { get; set; } = "Steam"; // or Custom
             public string? ProgramArgs { get; set; } = "steam://open/bigpicture";
             public int DebounceSeconds { get; set; } = 1;
