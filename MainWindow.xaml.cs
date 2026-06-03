@@ -32,17 +32,27 @@ namespace PCConsoleMode
         public MainWindow()
         {
             InitializeComponent();
+            // Check command-line for explicit minimized request (e.g. from registry Run value)
+            var cmdArgs = System.Environment.GetCommandLineArgs();
+            var cmdMinimized = cmdArgs.Any(a => string.Equals(a, "--minimized", System.StringComparison.OrdinalIgnoreCase));
             LoadSettings();
             PopulateBtDevices();
             BindSettingsToUi();
-            // If configured to run at startup, start minimized to tray
-            if (_settings.RunAtStartup && _settingsLoaded)
+            // If configured to run at startup (either saved or registry), start minimized to tray
+            if ((_settings.RunAtStartup || RegistryRunKeyExists()) && _settingsLoaded)
             {
-                // start minimized; only start monitoring if it was previously enabled
-                MinimizeToTray();
-                if (_settings.IsMonitoring)
+                // minimize-to-tray if user had that enabled, or if the process was launched with --minimized
+                if (_settings.MinimizeToTray || cmdMinimized)
                 {
+                    MinimizeToTray();
+                }
+                // If RunAtStartup is enabled, ensure monitoring is started on launch
+                if (_settings.RunAtStartup || _settings.IsMonitoring)
+                {
+                    _settings.IsMonitoring = true;
                     StartMonitoringIfNeeded();
+                    // persist that monitoring should be active
+                    SaveSettings();
                 }
             }
 
@@ -53,14 +63,13 @@ namespace PCConsoleMode
             if (_suppressUiEvents) return;
             try
             {
-                EnableStartup();
+                // Include --minimized in the registry command if the user wants minimize-to-tray
+                var includeMin = MinimizeToTrayCheck.IsChecked == true;
+                EnableStartup(includeMin);
                 _settings.RunAtStartup = true;
-                // when enabling run at startup, start minimized when next run: if already running minimize now
-                if (!_isBackground)
-                {
-                    // just minimize to tray; do not start monitoring automatically
-                    MinimizeToTray();
-                }
+                // persist the preference so next launch reads it
+                SaveSettings(true);
+                // do not minimize the running app when toggling run-at-startup; only create registry entry
                 UpdateAutoStartIndicator();
             }
             catch { }
@@ -73,6 +82,7 @@ namespace PCConsoleMode
             {
                 DisableStartup();
                 _settings.RunAtStartup = false;
+                SaveSettings(true);
                 UpdateAutoStartIndicator();
             }
             catch { }
@@ -149,7 +159,10 @@ namespace PCConsoleMode
         private void UpdateAutoStartIndicator()
         {
             Dispatcher.Invoke(() => {
-                if (_settings.IsMonitoring && RegistryRunKeyExists())
+                // Show that monitoring will auto-start if the app is configured to run at startup
+                // (either via saved preference or registry Run key). This aligns with the user's
+                // expectation that checking Run at startup enables auto-start behavior.
+                if (RegistryRunKeyExists() || _settings.RunAtStartup)
                 {
                     AutoStartIndicator.Text = "Monitoring WILL auto-start on next launch";
                     AutoStartIndicator.Foreground = System.Windows.Media.Brushes.Green;
@@ -307,10 +320,20 @@ namespace PCConsoleMode
 
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
-            SaveSettings(true);
-            Log("Settings saved");
-            StatusText.Text = "Saved";
-            Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
+            try
+            {
+                SaveSettings(true);
+                Log("Settings saved");
+                StatusText.Text = "Saved";
+                Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
+            }
+            catch (Exception ex)
+            {
+                Log($"SaveButton_Click error: {ex.Message}");
+                Logger.LogException(ex, "SaveButton_Click");
+                try { CrashDumper.WriteDump(ex, "SaveButton_Click"); } catch { }
+                throw;
+            }
         }
 
         private void ToggleAdvancedButton_Click(object? sender, RoutedEventArgs e)
@@ -396,7 +419,7 @@ namespace PCConsoleMode
             if (_notifyIcon != null) _notifyIcon.Visible = true;
         }
 
-        private void EnableStartup()
+        private void EnableStartup(bool includeMinimized)
         {
             try
             {
@@ -458,6 +481,11 @@ namespace PCConsoleMode
                 const string regPath = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\PCConsoleMode";
                 if (!string.IsNullOrEmpty(command))
                 {
+                    // append --minimized if requested so the launched process knows to minimize
+                    if (includeMinimized)
+                    {
+                        command = command + " --minimized";
+                    }
                     runKey.SetValue("PCConsoleMode", command);
                     Log($"EnableStartup: wrote {regPath} = {command}");
                 }
@@ -548,10 +576,15 @@ namespace PCConsoleMode
 
         private void Log(string msg)
         {
-            Dispatcher.Invoke(() => {
-                LogText.AppendText($"{DateTime.Now:HH:mm:ss} - {msg}\n");
-                LogText.ScrollToEnd();
-            });
+            try
+            {
+                Dispatcher.Invoke(() => {
+                    LogText.AppendText($"{DateTime.Now:HH:mm:ss} - {msg}\n");
+                    LogText.ScrollToEnd();
+                });
+            }
+            catch { }
+            Logger.Log(msg);
         }
 
         private void StartStopButton_Click(object sender, RoutedEventArgs e)
@@ -587,6 +620,8 @@ namespace PCConsoleMode
                     try { CheckControllerStatus(); } catch (Exception ex) { Log($"CheckControllerStatus error: {ex.Message}"); }
                 };
                 _watcher.Start();
+                _settings.IsMonitoring = true;
+                SaveSettings();
                 Log("WMI watcher started");
             }
             catch (Exception ex)

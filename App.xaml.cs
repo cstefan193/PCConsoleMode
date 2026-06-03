@@ -2,6 +2,8 @@
 using System.Data;
 using System.Windows;
 using System.Threading;
+using System;
+using System.Threading.Tasks;
 
 
 namespace PCConsoleMode
@@ -19,6 +21,25 @@ namespace PCConsoleMode
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            // initialize file logger and global exception handlers
+            Logger.Init();
+            AppDomain.CurrentDomain.UnhandledException += (s, ev) => {
+                try { if (ev.ExceptionObject is Exception ex) Logger.LogException(ex, "AppDomain.UnhandledException"); }
+                catch { }
+            };
+            TaskScheduler.UnobservedTaskException += (s, ev) => {
+                try { Logger.LogException(ev.Exception, "TaskScheduler.UnobservedTaskException"); ev.SetObserved(); }
+                catch { }
+            };
+            // WPF UI-thread unhandled exceptions
+            this.DispatcherUnhandledException += (s, ev) => {
+                try { Logger.LogException(ev.Exception, "DispatcherUnhandledException"); }
+                catch { }
+                // do not swallow by default; allow default behavior (app will still crash)
+                try { CrashDumper.WriteDump(ev.Exception, "DispatcherUnhandledException"); } catch { }
+                ev.Handled = false;
+            };
+
             const string mutexName = "PCConsoleMode_SingleInstanceMutex_v1";
             const string activationEventName = "PCConsoleMode_ActivationEvent_v1";
             try
