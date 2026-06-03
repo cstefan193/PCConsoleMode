@@ -58,6 +58,47 @@ namespace PCConsoleMode
 
         }
 
+        private string RunPowershellAndGetOutput(string command, int timeoutMs)
+        {
+            // If caller passed a full PowerShell argument string (e.g. beginning with -NoProfile or -Command),
+            // trust it. Otherwise, prefix with -NoProfile -Command and quote the script body.
+            string args;
+            var trimmed = (command ?? string.Empty).TrimStart();
+            if (trimmed.StartsWith("-"))
+            {
+                // assume caller provided full argument list
+                args = command;
+            }
+            else
+            {
+                args = $"-NoProfile -Command \"{command}\"";
+            }
+
+            var psi = new ProcessStartInfo("powershell", args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            try
+            {
+                using var p = Process.Start(psi);
+                if (p == null) return string.Empty;
+                // wait with timeout then read streams
+                p.WaitForExit(timeoutMs);
+                var outt = p.StandardOutput.ReadToEnd();
+                var err = p.StandardError.ReadToEnd();
+                if (!string.IsNullOrWhiteSpace(err)) Log(err.Trim());
+                return outt ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log($"RunPowershellAndGetOutput error: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
         private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
         {
             try
@@ -210,17 +251,7 @@ namespace PCConsoleMode
             try
             {
                 var script = "Get-PnpDevice -Class Bluetooth | Select-Object -ExpandProperty FriendlyName";
-                var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi);
-                if (p == null) return;
-                var outt = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(2000);
+                var outt = RunPowershellAndGetOutput(script, 2000);
                 var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
                 Dispatcher.Invoke(() => {
                     ControllerCombo.ItemsSource = lines;
@@ -244,20 +275,10 @@ namespace PCConsoleMode
             try
             {
                 var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; Get-AudioDevice -List | ForEach-Object { $_.ID + '||' + $_.Name }";
-                var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi);
-                if (p == null) return;
-                var outt = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(3000);
+                var outt = RunPowershellAndGetOutput(script, 3000);
                 var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Contains("||")).Select(s => {
                     var parts = s.Split(new[] {"||"}, System.StringSplitOptions.None);
-                    return new AudioDevice { Id = parts[0], Display = parts[1] };
+                    return new AudioDevice { Id = parts.Length > 0 ? parts[0] : string.Empty, Display = parts.Length > 1 ? parts[1] : parts.FirstOrDefault() ?? string.Empty };
                 }).ToList();
                 Dispatcher.Invoke(() => {
                     GameAudioCombo.ItemsSource = lines;
@@ -322,8 +343,8 @@ namespace PCConsoleMode
             try
             {
                 var candidates = new[] {
-                    @"C:\\Program Files (x86)\\Steam\\steam.exe",
-                    @"C:\\Program Files\\Steam\\steam.exe"
+                    @"C:\Program Files (x86)\Steam\steam.exe",
+                    @"C:\Program Files\Steam\steam.exe"
                 };
                 foreach (var c in candidates)
                 {
@@ -348,7 +369,8 @@ namespace PCConsoleMode
                 Log($"SaveButton_Click error: {ex.Message}");
                 Logger.LogException(ex, "SaveButton_Click");
                 try { CrashDumper.WriteDump(ex, "SaveButton_Click"); } catch { }
-                throw;
+                // Do not rethrow from UI event handler; keep app running and show error in status
+                StatusText.Text = "Error saving settings";
             }
         }
 
@@ -553,6 +575,12 @@ namespace PCConsoleMode
                 }
                 return;
             }
+            // dispose notify icon if present
+            if (_notifyIcon != null)
+            {
+                try { _notifyIcon.Visible = false; _notifyIcon.Dispose(); } catch { }
+                _notifyIcon = null;
+            }
             base.OnClosing(e);
         }
 
@@ -695,20 +723,11 @@ namespace PCConsoleMode
             if (string.IsNullOrWhiteSpace(friendlyName)) friendlyName = "Xbox Wireless Controller";
             // escape single quotes
             var fnEsc = friendlyName.Replace("'", "''");
-            var script = $"-NoProfile -Command \"try {{ (Get-PnpDevice -Class Bluetooth -FriendlyName '{fnEsc}' | Get-PnpDeviceProperty -KeyName '{{83DA6326-97A6-4088-9453-A1923F573B29}} 15' | Select -ExpandProperty Data) }} catch {{ $false }}\"";
-            var psi = new ProcessStartInfo("powershell", script)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            // pass only the script body; RunPowershellAndGetOutput will add -NoProfile -Command
+            var script = $"try {{ (Get-PnpDevice -Class Bluetooth -FriendlyName '{fnEsc}' | Get-PnpDeviceProperty -KeyName '{{83DA6326-97A6-4088-9453-A1923F573B29}} 15' | Select -ExpandProperty Data) }} catch {{ $false }}";
             try
             {
-                using var p = Process.Start(psi);
-                if (p == null) return false;
-                var outt = p.StandardOutput.ReadToEnd().Trim();
-                p.WaitForExit(2000);
+                var outt = RunPowershellAndGetOutput(script, 2000).Trim();
                 if (string.IsNullOrEmpty(outt)) return false;
                 // PowerShell may return True/False or 1/0 or other; try parse
                 if (bool.TryParse(outt, out var b)) return b;
@@ -800,19 +819,9 @@ namespace PCConsoleMode
         {
             // call: Get-AudioDevice -List | Where-Object { $_.Name -like "*keyword*" }
             var script = $"Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; $results = Get-AudioDevice -List | Where-Object {{ $_.Name -like '*{keyword}*' }}; $results | ForEach-Object {{ $_.ID + '||' + $_.Name }}";
-            var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
             try
             {
-                using var p = Process.Start(psi);
-                if (p == null) return null;
-                var outt = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(3000);
+                var outt = RunPowershellAndGetOutput(script, 3000);
                 if (string.IsNullOrWhiteSpace(outt)) return null;
                 var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries);
                 if (lines.Length == 1)
@@ -829,7 +838,7 @@ namespace PCConsoleMode
         private void SetAudioDeviceById(string id)
         {
             var script = $"Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; Set-AudioDevice -ID '{id}'";
-            RunPowershellScript(script, 3000);
+            RunPowershellAndGetOutput(script, 3000);
         }
 
         private bool TrySetAudioDeviceWithRetries(string id)
@@ -850,17 +859,7 @@ namespace PCConsoleMode
             try
             {
                 var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; (Get-AudioDevice -List | Where-Object { $_.Default -eq $true }) | ForEach-Object { $_.ID }";
-                var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
-                {
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi);
-                if (p == null) return false;
-                var outt = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(2000);
+                var outt = RunPowershellAndGetOutput(script, 2000);
                 var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries);
                 return lines.Any(l => l.Trim().Equals(id, StringComparison.OrdinalIgnoreCase));
             }
@@ -874,29 +873,49 @@ namespace PCConsoleMode
         private void StopProcessByName(string name)
         {
             var script = $"Get-Process | Where-Object {{ $_.Name -like '{name}' }} | ForEach-Object {{ Stop-Process -Id $_.Id -Force }}";
-            RunPowershellScript(script, 2000);
+            RunPowershellAndGetOutput(script, 2000);
         }
 
         private void RunPowershellScript(string script, int timeoutMs)
         {
-            var psi = new ProcessStartInfo("powershell", $"-NoProfile -Command \"{script}\"")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            // Deprecated: use RunPowershellAndGetOutput
+            try { RunPowershellAndGetOutput(script, timeoutMs); } catch { }
+        }
+
+        private void EnsureNotifyIconCreated()
+        {
+            if (_notifyIcon != null) return;
+            _notifyIcon = new System.Windows.Forms.NotifyIcon();
+            _notifyIcon.Text = "PCConsoleMode";
             try
             {
-                using var p = Process.Start(psi);
-                if (p == null) return;
-                var outt = p.StandardOutput.ReadToEnd();
-                var err = p.StandardError.ReadToEnd();
-                p.WaitForExit(timeoutMs);
-                if (!string.IsNullOrWhiteSpace(outt)) Log(outt.Trim());
-                if (!string.IsNullOrWhiteSpace(err)) Log(err.Trim());
+                var uri = new System.Uri("pack://application:,,,/icons/1-05_icon-icons.com_69204.ico", System.UriKind.Absolute);
+                var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
+                if (stream != null)
+                {
+                    using var ms = new System.IO.MemoryStream();
+                    stream.CopyTo(ms);
+                    ms.Seek(0, System.IO.SeekOrigin.Begin);
+                    _notifyIcon.Icon = new System.Drawing.Icon(ms);
+                }
+                else
+                {
+                    _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
+                }
             }
-            catch (Exception ex) { Log($"RunPowershellScript error: {ex.Message}"); }
+            catch
+            {
+                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
+            }
+            _notifyIcon.Visible = true;
+            _notifyIcon.DoubleClick += (s, e) => Dispatcher.Invoke(RestoreFromTray);
+
+            var menu = new System.Windows.Forms.ContextMenuStrip();
+            var openItem = new System.Windows.Forms.ToolStripMenuItem("Open", null, (s,e)=> Dispatcher.Invoke(RestoreFromTray));
+            var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s,e)=> Dispatcher.Invoke(() => { _notifyIcon.Visible = false; System.Windows.Application.Current.Shutdown(); }));
+            menu.Items.Add(openItem);
+            menu.Items.Add(exitItem);
+            _notifyIcon.ContextMenuStrip = menu;
         }
         private class AudioDevice
         {

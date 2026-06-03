@@ -43,7 +43,8 @@ namespace PCConsoleMode
         {
             try
             {
-                var dumpsDir = Path.Combine("logs", "dumps");
+                var baseDir = AppContext.BaseDirectory ?? string.Empty;
+                var dumpsDir = Path.Combine(baseDir, "logs", "dumps");
                 Directory.CreateDirectory(dumpsDir);
                 var file = Path.Combine(dumpsDir, $"dump-{DateTime.Now:yyyyMMdd-HHmmss}.dmp");
                 using var fs = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.None);

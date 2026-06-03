@@ -7,13 +7,15 @@ namespace PCConsoleMode
     internal static class Logger
     {
         private static readonly object _lock = new object();
-        private static string _logDir = "logs";
+        private static string _logDir = string.Empty;
         private static string _logFile = string.Empty;
 
         public static void Init()
         {
             try
             {
+                // Use application base directory for logs so paths are consistent when started from Run registry
+                _logDir = Path.Combine(AppContext.BaseDirectory ?? string.Empty, "logs");
                 if (!Directory.Exists(_logDir)) Directory.CreateDirectory(_logDir);
                 _logFile = Path.Combine(_logDir, "app-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
                 Log("Logger initialized");
@@ -25,10 +27,24 @@ namespace PCConsoleMode
         {
             try
             {
+                // If logger failed to initialize, attempt best-effort fallback to temp path
+                if (string.IsNullOrEmpty(_logFile))
+                {
+                    try
+                    {
+                        var dir = Path.Combine(AppContext.BaseDirectory ?? string.Empty, "logs");
+                        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        _logFile = Path.Combine(dir, "app-fallback.log");
+                    }
+                    catch
+                    {
+                        _logFile = Path.Combine(Path.GetTempPath(), "PCConsoleMode.log");
+                    }
+                }
                 var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} - {message}" + Environment.NewLine;
                 lock (_lock)
                 {
-                    File.AppendAllText(_logFile, line, Encoding.UTF8);
+                    if (!string.IsNullOrEmpty(_logFile)) File.AppendAllText(_logFile, line, Encoding.UTF8);
                 }
             }
             catch { }
