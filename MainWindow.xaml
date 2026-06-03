@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:PCConsoleMode"
         mc:Ignorable="d"
-        Title="MainWindow" Height="700" Width="1000"
+        Title="PCConsoleMode" Height="700" Width="1000"
         Icon="pack://application:,,,/icons/1-05_icon-icons.com_69204.ico">
     <Grid Margin="10">
         <Grid.RowDefinitions>
