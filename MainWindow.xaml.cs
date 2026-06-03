@@ -103,7 +103,10 @@ namespace PCConsoleMode
         private CancellationTokenSource? _cts;
         private bool _lastBtStatus = false;
         private ManagementEventWatcher? _watcher;
-        private readonly string _settingsFile = "settings.json";
+        // Use an absolute path in the application's base directory so the
+        // settings file is found even when the process current directory is
+        // different (e.g. launched by the Run registry key at login).
+        private readonly string _settingsFile = System.IO.Path.Combine(AppContext.BaseDirectory ?? string.Empty, "settings.json");
         private Settings _settings = new Settings();
         private bool _settingsLoaded = false;
         private bool _suppressUiEvents = false;
