@@ -38,14 +38,11 @@ namespace PCConsoleMode
             LoadSettings();
             PopulateBtDevices();
             BindSettingsToUi();
-            // If configured to run at startup (either saved or registry), start minimized to tray
+            // If configured to run at startup (either saved or registry), schedule start-minimized behavior
             if ((_settings.RunAtStartup || RegistryRunKeyExists()) && _settingsLoaded)
             {
-                // minimize-to-tray if user had that enabled, or if the process was launched with --minimized
-                if (_settings.MinimizeToTray || cmdMinimized)
-                {
-                    MinimizeToTray();
-                }
+                // remember whether we should minimize on startup (either saved preference or --minimized flag)
+                _startMinimized = _settings.MinimizeToTray || cmdMinimized;
                 // If RunAtStartup is enabled, ensure monitoring is started on launch
                 if (_settings.RunAtStartup || _settings.IsMonitoring)
                 {
@@ -56,6 +53,21 @@ namespace PCConsoleMode
                 }
             }
 
+            // perform minimize-to-tray after the window has loaded to avoid being shown briefly
+            this.Loaded += MainWindow_Loaded;
+
+        }
+
+        private void MainWindow_Loaded(object? sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_startMinimized)
+                {
+                    MinimizeToTray();
+                }
+            }
+            catch { }
         }
 
         private void RunAtStartupCheck_Checked(object sender, RoutedEventArgs e)
@@ -97,6 +109,7 @@ namespace PCConsoleMode
         private bool _suppressUiEvents = false;
         private DateTime _lockUntil = DateTime.MinValue;
         private bool _advancedVisible = false;
+        private bool _startMinimized = false;
 
         private void BindSettingsToUi()
         {
@@ -105,7 +118,7 @@ namespace PCConsoleMode
                 if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && ControllerCombo.ItemsSource is IEnumerable<string> items)
                 {
                     var match = items.FirstOrDefault(s => s == _settings.ControllerFriendlyName);
-                    if (match != null) ControllerCombo.SelectedItem = match;
+                if (match != null) ControllerCombo.SelectedItem = match;
                 }
                 // populate audio combos and select stored choices
                 PopulateAudioDevices();

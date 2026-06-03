@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "PCConsoleMode": {
+      "commandName": "Project"
+    },
+    "Minimized": {
+      "commandName": "Project",
+      "commandLineArgs": "--minimized"
+    }
+  }
+}
