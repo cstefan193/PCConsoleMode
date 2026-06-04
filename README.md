@@ -1,32 +1,48 @@
 # PCConsoleMode
 
-PCConsoleMode is a small WPF utility that replicates the behavior of the original old-scripts/xbox.ps1: it watches for an Xbox Wireless Controller connecting via Bluetooth and switches the PC between a "game" setup (external display, selected audio device, launch a program such as Steam Big Picture) and a "desktop" setup (internal display, desktop audio device, stop the program).
+PCConsoleMode is a small Windows desktop utility that detects when a Bluetooth controller (default: "Xbox Wireless Controller") connects and switches your system between a "game" configuration and a "desktop" configuration. Typical actions include changing display mode, switching the default audio device, and launching/stopping a program such as Steam Big Picture.
 
 Key features
-- Watch for controller connect / disconnect using WMI and the same PnP property used by the original script.
-- Configure controller, audio devices (game/desktop), program to launch (Steam or custom) and program args.
-- Debounce window to ignore noisy or rapid state flips.
-- Tray (background) mode with optional start-on-login registration.
-- Settings saved to settings.json (local, not committed to Git by default).
+- WMI-based device change detection and PnP inspection for controller presence.
+- Configure controller friendly name, game/desktop audio devices, program to launch (Steam or custom) and program args.
+- Debounce window to avoid rapid flip-flopping when devices flake.
+- Minimize to tray and optional start-on-login registration (HKCU Run entry).
+- Settings persisted to a local settings.json file.
 
 Requirements
-- Windows 10/11 with .NET 10 (net10.0-windows).
-- PowerShell available (the app invokes a few PowerShell commands).
-- Optional: AudioDeviceCmdlets PowerShell module for audio device enumeration/control (used when available).
+- Windows 10 or Windows 11 (desktop app using WPF).
+- .NET: none required to run if you publish a self-contained single-file executable (recommended). If you plan to run from source you need the .NET 10 SDK to build.
+- PowerShell available on PATH (either Windows PowerShell or PowerShell Core/pwsh). The app runs a few short PowerShell commands under the current user context.
+- Optional: the AudioDeviceCmdlets PowerShell module for better audio device enumeration and control. If the module is missing the app will still try heuristic matching of audio device names.
 
-Build & run
-1. Open the solution in Visual Studio (or use dotnet build).
-2. Run the app. Use the UI to configure controller, audio devices and program/args.
-3. Click Save to persist configuration to settings.json. Click Start Monitoring to begin watching for controller events, or Run in Background to minimize to tray and enable start-on-login.
+Packaging / Distribution
+- Recommended: publish as a self-contained single-file executable so end users do not need to install .NET. Example (from repo root):
 
-Notes
-- The app invokes PowerShell commands (Get-PnpDevice, Get-PnpDeviceProperty, AudioDeviceCmdlets). Ensure the executing user has the necessary permissions. The HKCU Run registry entry is used for start-on-login so admin rights are not required for that.
-- settings.json is ignored by .gitignore so your local configuration will not be committed.
-- If you need more robust process tracking (to only stop the exact launched process instance), that can be implemented.
+  dotnet publish PCConsoleMode.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:PublishTrimmed=false
+
+  Notes:
+  - Use the RID appropriate for your target (win-x64, win-x86).
+  - Keep PublishTrimmed=false unless you validate trimming, because native P/Invoke (Dbghelp.dll) and reflection may be affected by aggressive trimming.
+
+Running from source (developer)
+- You will need the .NET 10 SDK installed. Build with:
+
+  dotnet build
+
+  Then run from Visual Studio or dotnet run.
+
+Behavioral details and runtime notes
+- The app invokes PowerShell commands (Get-PnpDevice, Get-PnpDeviceProperty, Get-AudioDevice etc.). These are executed as the current user and do not require elevation for the HKCU Run registry entry.
+- The app attempts to write logs and crash dumps under the application's base directory (near the executable). When publishing as single-file, verify disk write permissions in the chosen install location; using a per-user location (LocalAppData) is recommended for installers.
+- Crash dumps (minidumps) are only created on Windows and only when Dbghelp.dll is available; failures to create dumps are logged but do not crash the app.
 
 Troubleshooting
-- If audio devices do not appear, install the AudioDeviceCmdlets PowerShell module or refresh the audio list in the UI.
-- If the controller state does not change, try running the PowerShell commands shown in the original script to confirm the property values on your machine.
+- Audio devices not listed: install AudioDeviceCmdlets or use the Refresh button after plugging devices in.
+- Controller changes not detected: try running the underlying PowerShell commands used by the app to confirm PnP property values on your machine.
+- Publish errors: if publishing as self-contained single-file fails, check the publish output for missing native dependencies (Dbghelp) or permission issues on the publish target folder.
+
+Privacy & storage
+- settings.json is stored beside the executable (or in the publish folder). It is not committed to source control by default.
 
 License
-This repository contains your project code. Replace this section with the appropriate license for your project.
+- Replace this section with your chosen license.
