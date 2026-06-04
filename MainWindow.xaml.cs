@@ -60,21 +60,24 @@ namespace PCConsoleMode
 
         private string RunPowershellAndGetOutput(string command, int timeoutMs)
         {
-            // If caller passed a full PowerShell argument string (e.g. beginning with -NoProfile or -Command),
-            // trust it. Otherwise, prefix with -NoProfile -Command and quote the script body.
-            string args;
-            var trimmed = (command ?? string.Empty).TrimStart();
-            if (trimmed.StartsWith("-"))
-            {
-                // assume caller provided full argument list
-                args = command;
-            }
-            else
-            {
-                args = $"-NoProfile -Command \"{command}\"";
-            }
+            // callers should provide only the script body; prefix here to keep a single convention
+            var args = $"-NoProfile -Command \"{command}\"";
 
-            var psi = new ProcessStartInfo("powershell", args)
+            // prefer pwsh (PowerShell Core) if available, otherwise fallback to powershell
+            string exe = "powershell";
+            try
+            {
+                var which = Process.Start(new ProcessStartInfo("where", "pwsh") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+                if (which != null)
+                {
+                    var wout = which.StandardOutput.ReadToEnd();
+                    which.WaitForExit(500);
+                    if (!string.IsNullOrWhiteSpace(wout)) exe = "pwsh";
+                }
+            }
+            catch { }
+
+            var psi = new ProcessStartInfo(exe, args)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -108,7 +111,7 @@ namespace PCConsoleMode
                     MinimizeToTray();
                 }
             }
-            catch { }
+            catch (Exception ex) { Log($"MainWindow_Loaded error: {ex.Message}"); }
         }
 
         private void RunAtStartupCheck_Checked(object sender, RoutedEventArgs e)
@@ -125,7 +128,7 @@ namespace PCConsoleMode
                 // do not minimize the running app when toggling run-at-startup; only create registry entry
                 UpdateAutoStartIndicator();
             }
-            catch { }
+            catch (Exception ex) { Log($"RunAtStartupCheck_Checked error: {ex.Message}"); }
         }
 
         private void RunAtStartupCheck_Unchecked(object sender, RoutedEventArgs e)
@@ -138,7 +141,7 @@ namespace PCConsoleMode
                 SaveSettings(true);
                 UpdateAutoStartIndicator();
             }
-            catch { }
+            catch (Exception ex) { Log($"RunAtStartupCheck_Unchecked error: {ex.Message}"); }
         }
 
         private CancellationTokenSource? _cts;
@@ -248,21 +251,24 @@ namespace PCConsoleMode
 
         private void PopulateBtDevices()
         {
-            try
-            {
-                var script = "Get-PnpDevice -Class Bluetooth | Select-Object -ExpandProperty FriendlyName";
-                var outt = RunPowershellAndGetOutput(script, 2000);
-                var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
-                Dispatcher.Invoke(() => {
-                    ControllerCombo.ItemsSource = lines;
-                    if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && lines.Contains(_settings.ControllerFriendlyName))
-                        ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
-                });
-            }
-            catch (Exception ex)
-            {
-                Log($"PopulateBtDevices error: {ex.Message}");
-            }
+            Task.Run(() => {
+                try
+                {
+                    var script = "Get-PnpDevice -Class Bluetooth | Select-Object -ExpandProperty FriendlyName";
+                    var outt = RunPowershellAndGetOutput(script, 2000);
+                    var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                    Dispatcher.Invoke(() => {
+                        ControllerCombo.ItemsSource = lines;
+                        if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && lines.Contains(_settings.ControllerFriendlyName))
+                            ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log($"PopulateBtDevices error: {ex.Message}");
+                    Logger.LogException(ex, "PopulateBtDevices");
+                }
+            });
         }
 
         private void RefreshBtButton_Click(object sender, RoutedEventArgs e)
@@ -272,23 +278,26 @@ namespace PCConsoleMode
 
         private void PopulateAudioDevices()
         {
-            try
-            {
-                var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; Get-AudioDevice -List | ForEach-Object { $_.ID + '||' + $_.Name }";
-                var outt = RunPowershellAndGetOutput(script, 3000);
-                var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Contains("||")).Select(s => {
-                    var parts = s.Split(new[] {"||"}, System.StringSplitOptions.None);
-                    return new AudioDevice { Id = parts.Length > 0 ? parts[0] : string.Empty, Display = parts.Length > 1 ? parts[1] : parts.FirstOrDefault() ?? string.Empty };
-                }).ToList();
-                Dispatcher.Invoke(() => {
-                    GameAudioCombo.ItemsSource = lines;
-                    DesktopAudioCombo.ItemsSource = lines;
-                });
-            }
-            catch (Exception ex)
-            {
-                Log($"PopulateAudioDevices error: {ex.Message}");
-            }
+            Task.Run(() => {
+                try
+                {
+                    var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; Get-AudioDevice -List | ForEach-Object { $_.ID + '||' + $_.Name }";
+                    var outt = RunPowershellAndGetOutput(script, 3000);
+                    var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Contains("||")).Select(s => {
+                        var parts = s.Split(new[] {"||"}, System.StringSplitOptions.None);
+                        return new AudioDevice { Id = parts.Length > 0 ? parts[0] : string.Empty, Display = parts.Length > 1 ? parts[1] : parts.FirstOrDefault() ?? string.Empty };
+                    }).ToList();
+                    Dispatcher.Invoke(() => {
+                        GameAudioCombo.ItemsSource = lines;
+                        DesktopAudioCombo.ItemsSource = lines;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log($"PopulateAudioDevices error: {ex.Message}");
+                    Logger.LogException(ex, "PopulateAudioDevices");
+                }
+            });
         }
 
         private void RefreshAudioButton_Click(object sender, RoutedEventArgs e)
@@ -810,6 +819,17 @@ namespace PCConsoleMode
         {
             try
             {
+                // If file looks like a path to an executable, validate it first to give better diagnostics
+                try
+                {
+                    if (File.Exists(file))
+                    {
+                        Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true });
+                        return;
+                    }
+                }
+                catch { }
+                // Fallback: try starting via shell (useful for URL schemes like steam://)
                 Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true });
             }
             catch (Exception ex) { Log($"RunProcessHidden error: {ex.Message}"); }

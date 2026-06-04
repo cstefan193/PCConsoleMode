@@ -25,16 +25,16 @@ namespace PCConsoleMode
             Logger.Init();
             AppDomain.CurrentDomain.UnhandledException += (s, ev) => {
                 try { if (ev.ExceptionObject is Exception ex) Logger.LogException(ex, "AppDomain.UnhandledException"); }
-                catch { }
+                catch (Exception ex) { Logger.Log($"AppDomain.UnhandledException handler error: {ex.Message}"); }
             };
             TaskScheduler.UnobservedTaskException += (s, ev) => {
                 try { Logger.LogException(ev.Exception, "TaskScheduler.UnobservedTaskException"); ev.SetObserved(); }
-                catch { }
+                catch (Exception ex) { Logger.Log($"TaskScheduler.UnobservedTaskException handler error: {ex.Message}"); }
             };
             // WPF UI-thread unhandled exceptions
             this.DispatcherUnhandledException += (s, ev) => {
                 try { Logger.LogException(ev.Exception, "DispatcherUnhandledException"); }
-                catch { }
+                catch (Exception ex) { Logger.Log($"DispatcherUnhandledException handler error: {ex.Message}"); }
                 // do not swallow by default; allow default behavior (app will still crash)
                 try { CrashDumper.WriteDump(ev.Exception, "DispatcherUnhandledException"); } catch { }
                 ev.Handled = false;

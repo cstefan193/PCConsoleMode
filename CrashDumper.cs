@@ -47,20 +47,41 @@ namespace PCConsoleMode
                 var dumpsDir = Path.Combine(baseDir, "logs", "dumps");
                 Directory.CreateDirectory(dumpsDir);
                 var file = Path.Combine(dumpsDir, $"dump-{DateTime.Now:yyyyMMdd-HHmmss}.dmp");
-                using var fs = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.None);
-                var proc = Process.GetCurrentProcess();
-                var hProc = proc.Handle;
-                var pid = (uint)proc.Id;
-                var type = MiniDumpType.MiniDumpWithDataSegs | MiniDumpType.MiniDumpWithHandleData | MiniDumpType.MiniDumpWithPrivateReadWriteMemory | MiniDumpType.MiniDumpWithThreadInfo;
-                bool ok = MiniDumpWriteDump(hProc, pid, fs.SafeFileHandle, type, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-                if (ok)
+
+                // Only attempt to write a minidump on Windows platforms where Dbghelp is available
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
-                    Logger.Log($"WriteDump: success -> {file}");
+                    Logger.Log("WriteDump: skipping minidump because OS is not Windows");
                 }
                 else
                 {
-                    var err = Marshal.GetLastWin32Error();
-                    Logger.Log($"WriteDump: failed (err={err})");
+                    using var fs = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.None);
+                    var proc = Process.GetCurrentProcess();
+                    var hProc = proc.Handle;
+                    var pid = (uint)proc.Id;
+                    var type = MiniDumpType.MiniDumpWithDataSegs | MiniDumpType.MiniDumpWithHandleData | MiniDumpType.MiniDumpWithPrivateReadWriteMemory | MiniDumpType.MiniDumpWithThreadInfo;
+                    try
+                    {
+                        // Try to call the native MiniDumpWriteDump; if Dbghelp is not present or call fails, log and continue
+                        bool ok = MiniDumpWriteDump(hProc, pid, fs.SafeFileHandle, type, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                        if (ok)
+                        {
+                            Logger.Log($"WriteDump: success -> {file}");
+                        }
+                        else
+                        {
+                            var err = Marshal.GetLastWin32Error();
+                            Logger.Log($"WriteDump: failed (err={err})");
+                        }
+                    }
+                    catch (DllNotFoundException dllEx)
+                    {
+                        Logger.Log($"WriteDump: Dbghelp not found: {dllEx.Message}");
+                    }
+                    catch (Exception callEx)
+                    {
+                        Logger.Log($"WriteDump: exception writing dump: {callEx.Message}");
+                    }
                 }
                 if (ex != null) Logger.LogException(ex, context ?? "WriteDump");
             }
