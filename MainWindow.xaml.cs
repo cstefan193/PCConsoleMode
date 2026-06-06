@@ -173,11 +173,34 @@ namespace PCConsoleMode
         private void BindSettingsToUi()
         {
             Dispatcher.Invoke(() => {
-                // select controller in combo if present
-                if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && ControllerCombo.ItemsSource is IEnumerable<string> items)
+                // select controller in combo if present; if the combo hasn't been populated yet
+                // ensure the saved friendly name is visible so the user sees their saved preference.
+                if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName))
                 {
-                    var match = items.FirstOrDefault(s => s == _settings.ControllerFriendlyName);
-                    if (match != null) ControllerCombo.SelectedItem = match;
+                    if (ControllerCombo.ItemsSource is IEnumerable<string> items)
+                    {
+                        var match = items.FirstOrDefault(s => s == _settings.ControllerFriendlyName);
+                        if (match != null)
+                        {
+                            ControllerCombo.SelectedItem = match;
+                        }
+                        else
+                        {
+                            // Items exist but don't contain the saved name; prepend it so it's visible.
+                            var list = new System.Collections.Generic.List<string>(items);
+                            list.Insert(0, _settings.ControllerFriendlyName);
+                            ControllerCombo.ItemsSource = list;
+                            ControllerCombo.IsEnabled = true;
+                            ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
+                        }
+                    }
+                    else
+                    {
+                        // ItemsSource not set yet (loading); show the saved name so UI isn't empty.
+                        ControllerCombo.ItemsSource = new System.Collections.Generic.List<string> { _settings.ControllerFriendlyName };
+                        ControllerCombo.IsEnabled = true;
+                        ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
+                    }
                 }
                 // populate audio combos and select stored choices
                 PopulateAudioDevices();
@@ -317,6 +340,8 @@ namespace PCConsoleMode
                     Dispatcher.Invoke(() => {
                         // Preserve user's saved audio device selections even if they aren't present during enumeration.
                         var audioItems = new System.Collections.Generic.List<AudioDevice>(lines);
+                        // Always offer an explicit "None" selection that maps to an empty ID.
+                        audioItems.Insert(0, new AudioDevice { Id = string.Empty, Display = "(None - use system default)" });
                         if (!string.IsNullOrEmpty(_settings.GameAudioDeviceId) && !audioItems.Any(a => a.Id == _settings.GameAudioDeviceId))
                         {
                             audioItems.Insert(0, new AudioDevice { Id = _settings.GameAudioDeviceId, Display = "(Saved - not present) " + _settings.GameAudioDeviceId });
@@ -880,9 +905,14 @@ namespace PCConsoleMode
                 Log("Launching game mode...");
                 RunProcessHidden("DisplaySwitch.exe", "/external");
                 string? deviceId = null;
-                // If user selected a specific audio device, prefer that
-                if (!string.IsNullOrEmpty(_settings.GameAudioDeviceId))
+                // If user explicitly chose None (empty string), skip audio switching for game mode
+                if (_settings.GameAudioDeviceId != null && _settings.GameAudioDeviceId == string.Empty)
                 {
+                    Log("Game audio switching skipped (user selected None).");
+                }
+                else if (!string.IsNullOrEmpty(_settings.GameAudioDeviceId))
+                {
+                    // If user selected a specific audio device, prefer that
                     deviceId = _settings.GameAudioDeviceId;
                 }
                 else
@@ -902,8 +932,8 @@ namespace PCConsoleMode
                 }
                 if (deviceId == null)
                 {
-                    // If no audio device is found, log a warning but continue launching the game as requested.
-                    Log("Warning: No suitable game audio device found. Continuing to launch game without switching audio.");
+                    // If no audio device is found (or user skipped), log a warning but continue launching the game as requested.
+                    Log("Warning: No suitable game audio device found or switching skipped. Continuing to launch game without switching audio.");
                 }
                 else
                 {
@@ -922,14 +952,22 @@ namespace PCConsoleMode
             else
             {
                 Log("Launching desktop mode...");
-                var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId)
-                    ? _settings.DesktopAudioDeviceId
-                    : GetAudioDeviceID("Headphones");
-                if (desktopId != null)
+                // Skip desktop audio switching if user explicitly selected None (empty string)
+                if (_settings.DesktopAudioDeviceId != null && _settings.DesktopAudioDeviceId == string.Empty)
                 {
-                    if (!TrySetAudioDeviceWithRetries(desktopId))
+                    Log("Desktop audio switching skipped (user selected None).");
+                }
+                else
+                {
+                    var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId)
+                        ? _settings.DesktopAudioDeviceId
+                        : GetAudioDeviceID("Headphones");
+                    if (desktopId != null)
                     {
-                        Log("Warning: failed to set desktop audio device after retries.");
+                        if (!TrySetAudioDeviceWithRetries(desktopId))
+                        {
+                            Log("Warning: failed to set desktop audio device after retries.");
+                        }
                     }
                 }
                 RunProcessHidden("DisplaySwitch.exe", "/internal");
