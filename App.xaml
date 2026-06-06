@@ -1,9 +1,53 @@
-﻿<Application x:Class="PCConsoleMode.App"
+<Application x:Class="PCConsoleMode.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:PCConsoleMode"
-             StartupUri="MainWindow.xaml">
+             xmlns:local="clr-namespace:PCConsoleMode">
+    <!--
+        FIX #1: StartupUri removed. MainWindow is now created manually in App.xaml.cs
+        OnStartup() AFTER the single-instance mutex check, so the second-instance path
+        calls Shutdown() before any window is ever constructed — no brief flash/race.
+    -->
     <Application.Resources>
-         
+
+        <!-- FIX #8: Flat toggle button style for the Advanced section chevron.
+             Removes the default button border/chrome so it sits naturally in the GroupBox header. -->
+        <Style x:Key="FlatToggleButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#1A000000"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#33000000"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- FIX #5: Style that highlights numeric TextBoxes red when they contain non-integer input. -->
+        <Style x:Key="NumericTextBox" TargetType="TextBox">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding RelativeSource={RelativeSource Self}, Path=Text, Converter={x:Static local:IsNotIntConverter.Instance}}" Value="True">
+                    <Setter Property="Background" Value="#FFDDDD"/>
+                    <Setter Property="ToolTip" Value="Please enter a whole number."/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
     </Application.Resources>
 </Application>

@@ -14,6 +14,7 @@ using System.Windows.Threading;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Registry = Microsoft.Win32.Registry;
+using ComboBox = System.Windows.Controls.ComboBox;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -255,6 +256,7 @@ namespace PCConsoleMode
 
         private void PopulateBtDevices()
         {
+            SetComboLoading(ControllerCombo, true);
             Task.Run(() => {
                 try
                 {
@@ -266,6 +268,7 @@ namespace PCConsoleMode
                                     .ToList();
                     Dispatcher.Invoke(() => {
                         ControllerCombo.ItemsSource = lines;
+                        ControllerCombo.IsEnabled = true;
                         if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && lines.Contains(_settings.ControllerFriendlyName))
                             ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
                     });
@@ -274,6 +277,7 @@ namespace PCConsoleMode
                 {
                     Log($"PopulateBtDevices error: {ex.Message}");
                     Logger.LogException(ex, "PopulateBtDevices");
+                    Dispatcher.Invoke(() => ControllerCombo.IsEnabled = true);
                 }
             });
         }
@@ -285,6 +289,8 @@ namespace PCConsoleMode
 
         private void PopulateAudioDevices()
         {
+            SetComboLoading(GameAudioCombo, true);
+            SetComboLoading(DesktopAudioCombo, true);
             Task.Run(() => {
                 try
                 {
@@ -303,13 +309,16 @@ namespace PCConsoleMode
                                     }).ToList();
                     Dispatcher.Invoke(() => {
                         GameAudioCombo.ItemsSource = lines;
+                        GameAudioCombo.IsEnabled = true;
                         DesktopAudioCombo.ItemsSource = lines;
+                        DesktopAudioCombo.IsEnabled = true;
                     });
                 }
                 catch (Exception ex)
                 {
                     Log($"PopulateAudioDevices error: {ex.Message}");
                     Logger.LogException(ex, "PopulateAudioDevices");
+                    Dispatcher.Invoke(() => { GameAudioCombo.IsEnabled = true; DesktopAudioCombo.IsEnabled = true; });
                 }
             });
         }
@@ -399,8 +408,10 @@ namespace PCConsoleMode
             {
                 SaveSettings(true);
                 Log("Settings saved");
-                StatusText.Text = "Saved";
-                Task.Delay(1000).ContinueWith(_ => Dispatcher.Invoke(() => StatusText.Text = _watcher is not null ? "Running" : "Stopped"));
+                SetStatus("Saved", System.Windows.Media.Brushes.DarkBlue);
+                Task.Delay(1000).ContinueWith(_ => SetStatus(
+                    _watcher is not null ? "Running" : "Stopped",
+                    _watcher is not null ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Gray));
             }
             catch (Exception ex)
             {
@@ -408,7 +419,7 @@ namespace PCConsoleMode
                 Logger.LogException(ex, "SaveButton_Click");
                 // FIX #8 (CrashDumper): Don't write a crash dump for a settings-save failure —
                 // that's too heavy-handed for a non-fatal error. Log it and show status instead.
-                StatusText.Text = "Error saving settings";
+                SetStatus("Error saving settings", System.Windows.Media.Brushes.Red);
             }
         }
 
@@ -430,7 +441,7 @@ namespace PCConsoleMode
             if (_watcher is null)
             {
                 StartWatcher();
-                Dispatcher.Invoke(() => { StartStopButton.Content = "Stop Monitoring"; StatusText.Text = "Running"; });
+                Dispatcher.Invoke(() => { StartStopButton.Content = "Stop Monitoring"; SetStatus("Running", System.Windows.Media.Brushes.Green); });
                 Log("Monitoring started (background)");
             }
         }
@@ -681,13 +692,65 @@ namespace PCConsoleMode
             Logger.Log(msg);
         }
 
+        // FIX #3: Update StatusText color alongside its text so state is immediately obvious.
+        private void SetStatus(string text, System.Windows.Media.Brush color)
+        {
+            Dispatcher.Invoke(() => {
+                StatusText.Text = text;
+                StatusText.Foreground = color;
+            });
+        }
+
+        // FIX #5: Block non-digit keypresses in numeric TextBoxes.
+        private void NumericTextBox_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+        {
+            e.Handled = !int.TryParse(e.Text, out _);
+        }
+
+        // FIX #7: Trim log TextBox to a maximum number of lines to prevent unbounded memory growth
+        // when monitoring runs for extended periods.
+        private const int MaxLogLines = 500;
+        private void LogText_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            try
+            {
+                var lines = LogText.LineCount;
+                if (lines > MaxLogLines)
+                {
+                    // Remove the oldest lines to bring count back to the limit.
+                    // GetCharacterIndexFromLineIndex gives us the char offset of the line
+                    // we want to keep as the new first line.
+                    int trimToIndex = LogText.GetCharacterIndexFromLineIndex(lines - MaxLogLines);
+                    LogText.Text = LogText.Text.Substring(trimToIndex);
+                    LogText.ScrollToEnd();
+                }
+            }
+            catch { }
+        }
+
+        // FIX #9: Helpers to show/hide the "Loading…" state on the ComboBoxes.
+        // Note: WPF forbids mixing ItemsSource with direct Items manipulation.
+        // We therefore only disable the combo while loading and rely on the
+        // placeholder items defined in XAML — we never touch Items from code.
+        private void SetComboLoading(ComboBox combo, bool loading)
+        {
+            Dispatcher.Invoke(() => {
+                if (loading)
+                {
+                    combo.ItemsSource = null;
+                    combo.IsEnabled = false;
+                }
+                // Re-enabling happens in the caller once ItemsSource is set.
+            });
+        }
+
         private void StartStopButton_Click(object sender, RoutedEventArgs e)
         {
             if (_watcher != null)
             {
                 StopWatcher();
                 StartStopButton.Content = "Start Monitoring";
-                StatusText.Text = "Stopped";
+                SetStatus("Stopped", System.Windows.Media.Brushes.Gray);
                 SaveSettings(true);
                 Log("Monitoring stopped by user");
                 return;
@@ -696,7 +759,7 @@ namespace PCConsoleMode
             SaveSettings(true);
             StartWatcher();
             StartStopButton.Content = "Stop Monitoring";
-            StatusText.Text = "Running";
+            SetStatus("Running", System.Windows.Media.Brushes.Green);
             Log("Monitoring started");
         }
 

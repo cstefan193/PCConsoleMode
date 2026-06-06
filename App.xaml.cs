@@ -128,6 +128,14 @@ namespace PCConsoleMode
             }
 
             base.OnStartup(e);
+
+            // FIX #1 (App.xaml): StartupUri was removed from App.xaml so WPF no longer
+            // auto-creates MainWindow before OnStartup runs. We create it manually here,
+            // after the single-instance check, so the second-instance path (Shutdown above)
+            // exits cleanly without ever constructing a window.
+            var window = new MainWindow();
+            this.MainWindow = window;
+            window.Show();
         }
 
         protected override void OnExit(ExitEventArgs e)
