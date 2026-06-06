@@ -56,13 +56,31 @@ namespace PCConsoleMode
                 else
                 {
                     using var fs = new FileStream(file, FileMode.Create, FileAccess.Write, FileShare.None);
-                    var proc = Process.GetCurrentProcess();
-                    var hProc = proc.Handle;
-                    var pid = (uint)proc.Id;
-                    var type = MiniDumpType.MiniDumpWithDataSegs | MiniDumpType.MiniDumpWithHandleData | MiniDumpType.MiniDumpWithPrivateReadWriteMemory | MiniDumpType.MiniDumpWithThreadInfo;
+
+                    // FIX #7: Wrap process handle access separately so a permissions failure
+                    // here doesn't suppress the exception logging below.
+                    IntPtr hProc;
+                    uint pid;
                     try
                     {
-                        // Try to call the native MiniDumpWriteDump; if Dbghelp is not present or call fails, log and continue
+                        var proc = Process.GetCurrentProcess();
+                        hProc = proc.Handle;
+                        pid = (uint)proc.Id;
+                    }
+                    catch (Exception handleEx)
+                    {
+                        Logger.Log($"WriteDump: cannot access process handle: {handleEx.Message}");
+                        // Still log the exception even if we can't write the dump file
+                        if (ex != null) Logger.LogException(ex, context ?? "WriteDump");
+                        return;
+                    }
+
+                    var type = MiniDumpType.MiniDumpWithDataSegs
+                             | MiniDumpType.MiniDumpWithHandleData
+                             | MiniDumpType.MiniDumpWithPrivateReadWriteMemory
+                             | MiniDumpType.MiniDumpWithThreadInfo;
+                    try
+                    {
                         bool ok = MiniDumpWriteDump(hProc, pid, fs.SafeFileHandle, type, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
                         if (ok)
                         {
@@ -83,6 +101,7 @@ namespace PCConsoleMode
                         Logger.Log($"WriteDump: exception writing dump: {callEx.Message}");
                     }
                 }
+
                 if (ex != null) Logger.LogException(ex, context ?? "WriteDump");
             }
             catch (Exception e)

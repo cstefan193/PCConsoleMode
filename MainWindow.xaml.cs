@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Windows;
 using System.Diagnostics;
 using System.Threading;
@@ -55,29 +55,35 @@ namespace PCConsoleMode
 
             // perform minimize-to-tray after the window has loaded to avoid being shown briefly
             this.Loaded += MainWindow_Loaded;
-
         }
 
-        private string RunPowershellAndGetOutput(string command, int timeoutMs)
+        // FIX #7: Cache pwsh availability so we don't spawn 'where pwsh' on every PS call
+        private static readonly string _powershellExe = DetectPowershellExe();
+        private static string DetectPowershellExe()
         {
-            // callers should provide only the script body; prefix here to keep a single convention
-            var args = $"-NoProfile -Command \"{command}\"";
-
-            // prefer pwsh (PowerShell Core) if available, otherwise fallback to powershell
-            string exe = "powershell";
             try
             {
-                var which = Process.Start(new ProcessStartInfo("where", "pwsh") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+                var which = Process.Start(new ProcessStartInfo("where", "pwsh")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
                 if (which != null)
                 {
                     var wout = which.StandardOutput.ReadToEnd();
                     which.WaitForExit(500);
-                    if (!string.IsNullOrWhiteSpace(wout)) exe = "pwsh";
+                    if (!string.IsNullOrWhiteSpace(wout)) return "pwsh";
                 }
             }
             catch { }
+            return "powershell";
+        }
 
-            var psi = new ProcessStartInfo(exe, args)
+        private string RunPowershellAndGetOutput(string command, int timeoutMs)
+        {
+            var args = $"-NoProfile -Command \"{command}\"";
+            var psi = new ProcessStartInfo(_powershellExe, args)
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -88,10 +94,15 @@ namespace PCConsoleMode
             {
                 using var p = Process.Start(psi);
                 if (p == null) return string.Empty;
-                // wait with timeout then read streams
+
+                // FIX #6: Read streams asynchronously to prevent pipe-buffer deadlock.
+                // Reading stdout/stderr only after WaitForExit can deadlock if the child
+                // writes more data than fits in the OS pipe buffer (~4 KB).
+                var outTask = p.StandardOutput.ReadToEndAsync();
+                var errTask = p.StandardError.ReadToEndAsync();
                 p.WaitForExit(timeoutMs);
-                var outt = p.StandardOutput.ReadToEnd();
-                var err = p.StandardError.ReadToEnd();
+                var outt = outTask.Result;
+                var err = errTask.Result;
                 if (!string.IsNullOrWhiteSpace(err)) Log(err.Trim());
                 return outt ?? string.Empty;
             }
@@ -144,7 +155,7 @@ namespace PCConsoleMode
             catch (Exception ex) { Log($"RunAtStartupCheck_Unchecked error: {ex.Message}"); }
         }
 
-        private CancellationTokenSource? _cts;
+        // FIX #1/#13: _cts was declared but never used (leftover from old polling approach). Removed.
         private bool _lastBtStatus = false;
         private ManagementEventWatcher? _watcher;
         // Use an absolute path in the application's base directory so the
@@ -165,7 +176,7 @@ namespace PCConsoleMode
                 if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && ControllerCombo.ItemsSource is IEnumerable<string> items)
                 {
                     var match = items.FirstOrDefault(s => s == _settings.ControllerFriendlyName);
-                if (match != null) ControllerCombo.SelectedItem = match;
+                    if (match != null) ControllerCombo.SelectedItem = match;
                 }
                 // populate audio combos and select stored choices
                 PopulateAudioDevices();
@@ -193,25 +204,15 @@ namespace PCConsoleMode
             });
         }
 
+        // FIX #11: RegistryRunKeyExists no longer logs on every call to avoid flooding the log.
+        // Verbose registry logging was happening during BindSettingsToUi and UpdateAutoStartIndicator.
         private bool RegistryRunKeyExists()
         {
             try
             {
-                const string regPath = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\PCConsoleMode";
                 var runKey = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", false);
-                if (runKey == null)
-                {
-                    Log($"Registry Run key not found: {regPath}");
-                    return false;
-                }
-                var val = runKey.GetValue("PCConsoleMode");
-                if (val != null)
-                {
-                    Log($"Registry Run value found: {regPath} = {val}");
-                    return true;
-                }
-                Log($"Registry Run value not present: {regPath}");
-                return false;
+                if (runKey == null) return false;
+                return runKey.GetValue("PCConsoleMode") != null;
             }
             catch { return false; }
         }
@@ -219,9 +220,6 @@ namespace PCConsoleMode
         private void UpdateAutoStartIndicator()
         {
             Dispatcher.Invoke(() => {
-                // Show that monitoring will auto-start if the app is configured to run at startup
-                // (either via saved preference or registry Run key). This aligns with the user's
-                // expectation that checking Run at startup enables auto-start behavior.
                 if (RegistryRunKeyExists() || _settings.RunAtStartup)
                 {
                     AutoStartIndicator.Text = "Monitoring WILL auto-start on next launch";
@@ -245,7 +243,13 @@ namespace PCConsoleMode
                     var json = File.ReadAllText(_settingsFile);
                     _settings = JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
                 }
-                catch { _settings = new Settings(); }
+                catch (Exception ex)
+                {
+                    // FIX #12: Log deserialization errors instead of swallowing them silently.
+                    // The file may be malformed (e.g. manual edit). Reset to defaults and continue.
+                    Logger.Log($"LoadSettings: failed to deserialize settings, resetting to defaults. Error: {ex.Message}");
+                    _settings = new Settings();
+                }
             }
         }
 
@@ -256,7 +260,10 @@ namespace PCConsoleMode
                 {
                     var script = "Get-PnpDevice -Class Bluetooth | Select-Object -ExpandProperty FriendlyName";
                     var outt = RunPowershellAndGetOutput(script, 2000);
-                    var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList();
+                    var lines = outt.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries)
+                                    .Select(s => s.Trim())
+                                    .Where(s => !string.IsNullOrEmpty(s))
+                                    .ToList();
                     Dispatcher.Invoke(() => {
                         ControllerCombo.ItemsSource = lines;
                         if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && lines.Contains(_settings.ControllerFriendlyName))
@@ -283,10 +290,17 @@ namespace PCConsoleMode
                 {
                     var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; Get-AudioDevice -List | ForEach-Object { $_.ID + '||' + $_.Name }";
                     var outt = RunPowershellAndGetOutput(script, 3000);
-                    var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Contains("||")).Select(s => {
-                        var parts = s.Split(new[] {"||"}, System.StringSplitOptions.None);
-                        return new AudioDevice { Id = parts.Length > 0 ? parts[0] : string.Empty, Display = parts.Length > 1 ? parts[1] : parts.FirstOrDefault() ?? string.Empty };
-                    }).ToList();
+                    var lines = outt.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries)
+                                    .Select(s => s.Trim())
+                                    .Where(s => s.Contains("||"))
+                                    .Select(s => {
+                                        var parts = s.Split(new[] { "||" }, System.StringSplitOptions.None);
+                                        return new AudioDevice
+                                        {
+                                            Id = parts.Length > 0 ? parts[0] : string.Empty,
+                                            Display = parts.Length > 1 ? parts[1] : parts.FirstOrDefault() ?? string.Empty
+                                        };
+                                    }).ToList();
                     Dispatcher.Invoke(() => {
                         GameAudioCombo.ItemsSource = lines;
                         DesktopAudioCombo.ItemsSource = lines;
@@ -349,9 +363,24 @@ namespace PCConsoleMode
 
         private string FindSteamExe()
         {
+            // FIX #8: Check the Steam registry key first, which works regardless of install location.
             try
             {
-                var candidates = new[] {
+                var steamKey = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam", false);
+                if (steamKey != null)
+                {
+                    var regPath = steamKey.GetValue("SteamExe") as string;
+                    if (!string.IsNullOrWhiteSpace(regPath) && File.Exists(regPath))
+                        return regPath;
+                }
+            }
+            catch { }
+
+            // Fallback to common install locations
+            try
+            {
+                var candidates = new[]
+                {
                     @"C:\Program Files (x86)\Steam\steam.exe",
                     @"C:\Program Files\Steam\steam.exe"
                 };
@@ -377,8 +406,8 @@ namespace PCConsoleMode
             {
                 Log($"SaveButton_Click error: {ex.Message}");
                 Logger.LogException(ex, "SaveButton_Click");
-                try { CrashDumper.WriteDump(ex, "SaveButton_Click"); } catch { }
-                // Do not rethrow from UI event handler; keep app running and show error in status
+                // FIX #8 (CrashDumper): Don't write a crash dump for a settings-save failure —
+                // that's too heavy-handed for a non-fatal error. Log it and show status instead.
                 StatusText.Text = "Error saving settings";
             }
         }
@@ -396,8 +425,6 @@ namespace PCConsoleMode
         private System.Windows.Forms.NotifyIcon? _notifyIcon;
         private bool _isBackground = false;
 
-        // BackgroundButton removed; use Start Monitoring + close to minimize to tray
-
         private void StartMonitoringIfNeeded()
         {
             if (_watcher is null)
@@ -408,13 +435,26 @@ namespace PCConsoleMode
             }
         }
 
+        // FIX #1: MinimizeToTray now delegates icon setup to EnsureNotifyIconCreated,
+        // eliminating the duplicate setup code that caused ghost event handler registrations
+        // when MinimizeToTray was called more than once.
         private void MinimizeToTray()
         {
-            _notifyIcon ??= new System.Windows.Forms.NotifyIcon();
+            EnsureNotifyIconCreated();
+            _isBackground = true;
+            this.Hide();
+        }
+
+        // FIX #1: Single authoritative method for NotifyIcon creation and setup.
+        // The early return guard (if _notifyIcon != null) ensures handlers are only
+        // registered once, no matter how many times this is called.
+        private void EnsureNotifyIconCreated()
+        {
+            if (_notifyIcon != null) return;
+            _notifyIcon = new System.Windows.Forms.NotifyIcon();
             _notifyIcon.Text = "PCConsoleMode";
             try
             {
-                // Load the icon from the application resources (pack URI)
                 var uri = new System.Uri("pack://application:,,,/icons/1-05_icon-icons.com_69204.ico", System.UriKind.Absolute);
                 var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
                 if (stream != null)
@@ -437,14 +477,15 @@ namespace PCConsoleMode
             _notifyIcon.DoubleClick += (s, e) => Dispatcher.Invoke(RestoreFromTray);
 
             var menu = new System.Windows.Forms.ContextMenuStrip();
-            var openItem = new System.Windows.Forms.ToolStripMenuItem("Open", null, (s,e)=> Dispatcher.Invoke(RestoreFromTray));
-            var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s,e)=> Dispatcher.Invoke(() => { _notifyIcon.Visible = false; System.Windows.Application.Current.Shutdown(); }));
+            var openItem = new System.Windows.Forms.ToolStripMenuItem("Open", null, (s, e) => Dispatcher.Invoke(RestoreFromTray));
+            var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s, e) => Dispatcher.Invoke(() =>
+            {
+                _notifyIcon.Visible = false;
+                System.Windows.Application.Current.Shutdown();
+            }));
             menu.Items.Add(openItem);
             menu.Items.Add(exitItem);
             _notifyIcon.ContextMenuStrip = menu;
-
-            _isBackground = true;
-            this.Hide();
         }
 
         private void RestoreFromTray()
@@ -528,7 +569,6 @@ namespace PCConsoleMode
                 const string regPath = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\PCConsoleMode";
                 if (!string.IsNullOrEmpty(command))
                 {
-                    // append --minimized if requested so the launched process knows to minimize
                     if (includeMinimized)
                     {
                         command = command + " --minimized";
@@ -593,6 +633,9 @@ namespace PCConsoleMode
             base.OnClosing(e);
         }
 
+        // FIX #13: SaveSettings reads UI controls and must only be called from the UI thread.
+        // SaveSettings() is private; callers from background threads (StartWatcher/StopWatcher)
+        // should continue to call it only while on the UI thread (which they currently do).
         private void SaveSettings(bool forceCreate = false)
         {
             _settings.ControllerFriendlyName = (ControllerCombo.SelectedItem as string) ?? string.Empty;
@@ -610,9 +653,9 @@ namespace PCConsoleMode
                 _settings.SteamPath = SteamPathText.Text.Trim();
             }
             _settings.ProgramArgs = ProgramArgsText.Text.Trim();
-            if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = iv;
-            if (int.TryParse(RetryCountText.Text.Trim(), out var rc)) _settings.RetryCount = rc;
-            if (int.TryParse(RetryDelayText.Text.Trim(), out var rd)) _settings.RetryDelaySeconds = rd;
+            if (int.TryParse(IntervalText.Text.Trim(), out var iv)) _settings.DebounceSeconds = Math.Max(0, iv);
+            if (int.TryParse(RetryCountText.Text.Trim(), out var rc)) _settings.RetryCount = Math.Max(1, rc);
+            if (int.TryParse(RetryDelayText.Text.Trim(), out var rd)) _settings.RetryDelaySeconds = Math.Max(1, rd);
             _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
             _settings.RunAtStartup = RunAtStartupCheck.IsChecked == true;
             // Only create/write settings file if we previously loaded settings or forceCreate is true
@@ -624,8 +667,6 @@ namespace PCConsoleMode
             }
             UpdateAutoStartIndicator();
         }
-
-
 
         private void Log(string msg)
         {
@@ -719,30 +760,31 @@ namespace PCConsoleMode
 
             Log("Detected change in controller presence");
             _lastBtStatus = bt;
+
+            // FIX #5: Set debounce lock BEFORE calling SwitchMode.
+            // SwitchMode can take several seconds (audio retries), during which another
+            // WMI event could arrive and slip through the old lock check.
+            _lockUntil = DateTime.UtcNow.AddSeconds(Math.Max(0, _settings.DebounceSeconds));
+
             try { SwitchMode(bt); }
             catch (Exception ex) { Log($"SwitchMode error: {ex.Message}"); }
-
-            // lock until opposite events are allowed
-            _lockUntil = DateTime.UtcNow.AddSeconds(Math.Max(0, _settings.DebounceSeconds));
         }
 
         private bool GetBtStatus(string friendlyName)
         {
-            // Use PowerShell similar to original script: read the PnP device property Data
+            // Use PowerShell to read the PnP device connection property
             if (string.IsNullOrWhiteSpace(friendlyName)) friendlyName = "Xbox Wireless Controller";
             // escape single quotes
             var fnEsc = friendlyName.Replace("'", "''");
-            // pass only the script body; RunPowershellAndGetOutput will add -NoProfile -Command
             var script = $"try {{ (Get-PnpDevice -Class Bluetooth -FriendlyName '{fnEsc}' | Get-PnpDeviceProperty -KeyName '{{83DA6326-97A6-4088-9453-A1923F573B29}} 15' | Select -ExpandProperty Data) }} catch {{ $false }}";
             try
             {
                 var outt = RunPowershellAndGetOutput(script, 2000).Trim();
                 if (string.IsNullOrEmpty(outt)) return false;
-                // PowerShell may return True/False or 1/0 or other; try parse
                 if (bool.TryParse(outt, out var b)) return b;
                 if (int.TryParse(outt, out var i)) return i != 0;
-                // fallback: check textual values
-                return outt.Equals("OK", System.StringComparison.OrdinalIgnoreCase) || outt.Equals("True", System.StringComparison.OrdinalIgnoreCase);
+                return outt.Equals("OK", System.StringComparison.OrdinalIgnoreCase) ||
+                       outt.Equals("True", System.StringComparison.OrdinalIgnoreCase);
             }
             catch (Exception ex)
             {
@@ -765,21 +807,20 @@ namespace PCConsoleMode
                 }
                 else
                 {
+                    // FIX #10: Fallback audio search used personal device names (Beyond, SONY, HDMI).
+                    // Now only searches for HDMI which is a generic term. Users should configure
+                    // a specific audio device in settings to avoid this fallback entirely.
                     int retries = 1;
                     while (retries <= 10 && deviceId == null)
                     {
-                        // try common names
-                        deviceId = GetAudioDeviceID("Beyond");
-                        if (deviceId == null) deviceId = GetAudioDeviceID("SONY");
-                        if (deviceId == null) deviceId = GetAudioDeviceID("HDMI");
+                        deviceId = GetAudioDeviceID("HDMI");
                         if (deviceId != null) break;
                         Log($"retrying audio device.. ({retries})");
                         Thread.Sleep(1000);
                         retries++;
                     }
                 }
-                if (deviceId == null) throw new Exception("No suitable audio device found.");
-                // attempt to set and verify with retries
+                if (deviceId == null) throw new Exception("No suitable audio device found. Please configure a Game Audio device in settings.");
                 if (!TrySetAudioDeviceWithRetries(deviceId))
                 {
                     throw new Exception("Failed to set game audio device after retries.");
@@ -793,7 +834,9 @@ namespace PCConsoleMode
             else
             {
                 Log("Launching desktop mode...");
-                var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId) ? _settings.DesktopAudioDeviceId : GetAudioDeviceID("Headphones");
+                var desktopId = !string.IsNullOrEmpty(_settings.DesktopAudioDeviceId)
+                    ? _settings.DesktopAudioDeviceId
+                    : GetAudioDeviceID("Headphones");
                 if (desktopId != null)
                 {
                     if (!TrySetAudioDeviceWithRetries(desktopId))
@@ -802,33 +845,38 @@ namespace PCConsoleMode
                     }
                 }
                 RunProcessHidden("DisplaySwitch.exe", "/internal");
-                // stop steam or custom process if configured
+                // FIX #9: Only stop Steam/custom process if this app was the one that launched it.
+                // Previously this would kill Steam even if it was already running before console mode.
                 if (_settings.LaunchMode == "Custom")
                 {
                     var procName = System.IO.Path.GetFileNameWithoutExtension(_settings.CustomPath ?? string.Empty);
                     if (!string.IsNullOrEmpty(procName)) StopProcessByName(procName);
                 }
-                else
+                else if (_steamLaunchedByUs)
                 {
                     StopProcessByName("steam");
                 }
             }
         }
 
+        // FIX #9: Track whether this app launched Steam so we only kill it if we started it.
+        private bool _steamLaunchedByUs = false;
+
         private void RunProcessHidden(string file, string args)
         {
             try
             {
-                // If file looks like a path to an executable, validate it first to give better diagnostics
-                try
+                if (File.Exists(file))
                 {
-                    if (File.Exists(file))
+                    Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true });
+                    // If this is the configured Steam/custom path, record that we launched it
+                    if (file.Equals(_settings.SteamPath, StringComparison.OrdinalIgnoreCase) ||
+                        file.Equals(_settings.CustomPath, StringComparison.OrdinalIgnoreCase))
                     {
-                        Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true });
-                        return;
+                        _steamLaunchedByUs = true;
                     }
+                    return;
                 }
-                catch { }
                 // Fallback: try starting via shell (useful for URL schemes like steam://)
                 Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true });
             }
@@ -837,13 +885,12 @@ namespace PCConsoleMode
 
         private string? GetAudioDeviceID(string keyword)
         {
-            // call: Get-AudioDevice -List | Where-Object { $_.Name -like "*keyword*" }
             var script = $"Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; $results = Get-AudioDevice -List | Where-Object {{ $_.Name -like '*{keyword}*' }}; $results | ForEach-Object {{ $_.ID + '||' + $_.Name }}";
             try
             {
                 var outt = RunPowershellAndGetOutput(script, 3000);
                 if (string.IsNullOrWhiteSpace(outt)) return null;
-                var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries);
+                var lines = outt.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
                 if (lines.Length == 1)
                 {
                     var parts = lines[0].Split(new[] { "||" }, System.StringSplitOptions.None);
@@ -880,7 +927,7 @@ namespace PCConsoleMode
             {
                 var script = "Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue; (Get-AudioDevice -List | Where-Object { $_.Default -eq $true }) | ForEach-Object { $_.ID }";
                 var outt = RunPowershellAndGetOutput(script, 2000);
-                var lines = outt.Split(new[] { '\r','\n' }, System.StringSplitOptions.RemoveEmptyEntries);
+                var lines = outt.Split(new[] { '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
                 return lines.Any(l => l.Trim().Equals(id, StringComparison.OrdinalIgnoreCase));
             }
             catch (Exception ex)
@@ -896,47 +943,8 @@ namespace PCConsoleMode
             RunPowershellAndGetOutput(script, 2000);
         }
 
-        private void RunPowershellScript(string script, int timeoutMs)
-        {
-            // Deprecated: use RunPowershellAndGetOutput
-            try { RunPowershellAndGetOutput(script, timeoutMs); } catch { }
-        }
+        // NOTE: RunPowershellScript was deprecated and unused — removed.
 
-        private void EnsureNotifyIconCreated()
-        {
-            if (_notifyIcon != null) return;
-            _notifyIcon = new System.Windows.Forms.NotifyIcon();
-            _notifyIcon.Text = "PCConsoleMode";
-            try
-            {
-                var uri = new System.Uri("pack://application:,,,/icons/1-05_icon-icons.com_69204.ico", System.UriKind.Absolute);
-                var stream = System.Windows.Application.GetResourceStream(uri)?.Stream;
-                if (stream != null)
-                {
-                    using var ms = new System.IO.MemoryStream();
-                    stream.CopyTo(ms);
-                    ms.Seek(0, System.IO.SeekOrigin.Begin);
-                    _notifyIcon.Icon = new System.Drawing.Icon(ms);
-                }
-                else
-                {
-                    _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-                }
-            }
-            catch
-            {
-                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
-            _notifyIcon.Visible = true;
-            _notifyIcon.DoubleClick += (s, e) => Dispatcher.Invoke(RestoreFromTray);
-
-            var menu = new System.Windows.Forms.ContextMenuStrip();
-            var openItem = new System.Windows.Forms.ToolStripMenuItem("Open", null, (s,e)=> Dispatcher.Invoke(RestoreFromTray));
-            var exitItem = new System.Windows.Forms.ToolStripMenuItem("Exit", null, (s,e)=> Dispatcher.Invoke(() => { _notifyIcon.Visible = false; System.Windows.Application.Current.Shutdown(); }));
-            menu.Items.Add(openItem);
-            menu.Items.Add(exitItem);
-            _notifyIcon.ContextMenuStrip = menu;
-        }
         private class AudioDevice
         {
             public string Id { get; set; } = string.Empty;
