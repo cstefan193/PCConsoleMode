@@ -267,9 +267,16 @@ namespace PCConsoleMode
                                     .Where(s => !string.IsNullOrEmpty(s))
                                     .ToList();
                     Dispatcher.Invoke(() => {
-                        ControllerCombo.ItemsSource = lines;
+                        // Preserve the user's saved controller choice even if the device isn't currently detected.
+                        // If the saved friendly name is missing from the discovered list, insert it so it remains selected.
+                        var items = new System.Collections.Generic.List<string>(lines);
+                        if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && !items.Contains(_settings.ControllerFriendlyName))
+                        {
+                            items.Insert(0, _settings.ControllerFriendlyName);
+                        }
+                        ControllerCombo.ItemsSource = items;
                         ControllerCombo.IsEnabled = true;
-                        if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName) && lines.Contains(_settings.ControllerFriendlyName))
+                        if (!string.IsNullOrEmpty(_settings.ControllerFriendlyName))
                             ControllerCombo.SelectedItem = _settings.ControllerFriendlyName;
                     });
                 }
@@ -308,9 +315,19 @@ namespace PCConsoleMode
                                         };
                                     }).ToList();
                     Dispatcher.Invoke(() => {
-                        GameAudioCombo.ItemsSource = lines;
+                        // Preserve user's saved audio device selections even if they aren't present during enumeration.
+                        var audioItems = new System.Collections.Generic.List<AudioDevice>(lines);
+                        if (!string.IsNullOrEmpty(_settings.GameAudioDeviceId) && !audioItems.Any(a => a.Id == _settings.GameAudioDeviceId))
+                        {
+                            audioItems.Insert(0, new AudioDevice { Id = _settings.GameAudioDeviceId, Display = "(Saved - not present) " + _settings.GameAudioDeviceId });
+                        }
+                        if (!string.IsNullOrEmpty(_settings.DesktopAudioDeviceId) && !audioItems.Any(a => a.Id == _settings.DesktopAudioDeviceId))
+                        {
+                            audioItems.Insert(0, new AudioDevice { Id = _settings.DesktopAudioDeviceId, Display = "(Saved - not present) " + _settings.DesktopAudioDeviceId });
+                        }
+                        GameAudioCombo.ItemsSource = audioItems;
                         GameAudioCombo.IsEnabled = true;
-                        DesktopAudioCombo.ItemsSource = lines;
+                        DesktopAudioCombo.ItemsSource = audioItems;
                         DesktopAudioCombo.IsEnabled = true;
                     });
                 }
@@ -883,10 +900,18 @@ namespace PCConsoleMode
                         retries++;
                     }
                 }
-                if (deviceId == null) throw new Exception("No suitable audio device found. Please configure a Game Audio device in settings.");
-                if (!TrySetAudioDeviceWithRetries(deviceId))
+                if (deviceId == null)
                 {
-                    throw new Exception("Failed to set game audio device after retries.");
+                    // If no audio device is found, log a warning but continue launching the game as requested.
+                    Log("Warning: No suitable game audio device found. Continuing to launch game without switching audio.");
+                }
+                else
+                {
+                    if (!TrySetAudioDeviceWithRetries(deviceId))
+                    {
+                        // Do not throw — log and continue to launch the game even if switching audio failed.
+                        Log("Warning: Failed to set game audio device after retries. Continuing to launch game.");
+                    }
                 }
                 if (!string.IsNullOrWhiteSpace(_settings.SteamPath))
                 {
